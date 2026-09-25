@@ -28,8 +28,8 @@ RANDOM_SEED = 42
 # ---------------------------------------------------------------------------
 # Experiment parameters (Section 3.2.2 / 3.2.3)
 # ---------------------------------------------------------------------------
-TEST_SIZE = 0.20          # 80/20 train/test split
-CV_FOLDS = 10             # 10-fold cross-validation (Raschka, 2016)
+TEST_SIZE = 0.20  # 80/20 train/test split
+CV_FOLDS = 10  # 10-fold cross-validation (Raschka, 2016)
 
 # ---------------------------------------------------------------------------
 # Feature categories (Section 2.2.3 / conceptual framework)
