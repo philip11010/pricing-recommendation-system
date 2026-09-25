@@ -10,6 +10,10 @@ target-version = "py311"
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
+[tool.ruff.lint.pep8-naming]
+# scikit-learn convention: X is the feature matrix
+extend-ignore-names = ["X", "X_*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
