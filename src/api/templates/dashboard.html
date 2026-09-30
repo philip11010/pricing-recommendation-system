@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Pricing Dashboard &middot; Mentor Pricing{% endblock %}
+
+{% block content %}
+{#
+  DOM order puts the recommendation first so that on narrow viewports the
+  price and the three actions sit at the top of the page. On wide viewports
+  CSS grid areas place the profile and performance panels in the left column.
+#}
+<div class="dashboard">
+
+  <section class="panel recommendation" aria-labelledby="recommendation-heading">
+    <h2 id="recommendation-heading" class="panel-heading">Suggested session price</h2>
+    <p class="price">
+      <span class="price-currency">{{ recommendation.currency }}</span>
+      <span class="price-value">{{ "{:,}".format(recommendation.price) }}</span>
+    </p>
+    <p class="price-context">
+      Your current listed price: {{ recommendation.currency }}
+      {{ "{:,}".format(recommendation.current_price) }}
+    </p>
+    <p class="advisory-note">
+      This price is advisory. You decide whether to accept it, change it, or
+      keep your own.
+    </p>
+
+    {# The three actions share one class and identical markup so that no
+       option is visually emphasised over the others. #}
+    <div class="actions" role="group" aria-label="Respond to the suggested price">
+      <button type="button" class="action-btn" name="decision" value="accept">Accept</button>
+      <button type="button" class="action-btn" name="decision" value="modify">Modify</button>
+      <button type="button" class="action-btn" name="decision" value="reject">Reject</button>
+    </div>
+  </section>
+
+  <section class="panel demand" aria-labelledby="demand-heading">
+    <h2 id="demand-heading" class="panel-heading">Demand signals</h2>
+    <dl class="stats">
+      <div><dt>Profile views (30 days)</dt><dd>{{ demand.profile_views_30d }}</dd></div>
+      <div><dt>Booking requests (30 days)</dt><dd>{{ demand.booking_requests_30d }}</dd></div>
+      <div><dt>Skill demand trend</dt><dd>{{ demand.skill_demand_trend }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="panel collapsible profile">
+    <input type="checkbox" id="toggle-profile" class="panel-toggle">
+    <label for="toggle-profile" class="panel-heading">Profile summary</label>
+    <div class="panel-body">
+      <dl class="stats">
+        <div><dt>Name</dt><dd>{{ profile.name }}</dd></div>
+        <div><dt>Specialisation</dt><dd>{{ profile.specialisation }}</dd></div>
+        <div><dt>Experience</dt><dd>{{ profile.experience_years }} years</dd></div>
+        <div><dt>Education</dt><dd>{{ profile.education }}</dd></div>
+        <div><dt>Certifications</dt><dd>{{ profile.certifications }}</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="panel collapsible performance">
+    <input type="checkbox" id="toggle-performance" class="panel-toggle">
+    <label for="toggle-performance" class="panel-heading">Performance</label>
+    <div class="panel-body">
+      <dl class="stats">
+        <div><dt>Rating</dt><dd>{{ performance.rating }} / 5</dd></div>
+        <div><dt>Reviews</dt><dd>{{ performance.reviews }}</dd></div>
+        <div><dt>Completion rate</dt><dd>{{ "%.0f"|format(performance.completion_rate * 100) }}%</dd></div>
+        <div><dt>Repeat booking rate</dt><dd>{{ "%.0f"|format(performance.repeat_booking_rate * 100) }}%</dd></div>
+      </dl>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
