@@ -1,0 +1,243 @@
+/*
+ * Mentor pricing dashboard.
+ *
+ * Mobile-first: the base rules target narrow viewports, where the price and
+ * the three actions come first and the profile and performance panels are
+ * collapsed. The min-width media query expands to the two-column layout.
+ */
+
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --text: #1d2330;
+  --muted: #5b6475;
+  --border: #d7dbe3;
+  --focus: #2f5fb3;
+  --radius: 8px;
+  --gap: 12px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.4;
+}
+
+.site-header {
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-title {
+  font-weight: 600;
+}
+
+.site-main {
+  padding: var(--gap) 16px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.dashboard {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: 1fr;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.panel-heading {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------- recommendation */
+
+.price {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.price-currency {
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+.price-value {
+  font-size: 2.4rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.price-context,
+.advisory-note {
+  margin: 4px 0 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/*
+ * The three actions are deliberately identical: same size (equal grid
+ * tracks), same colours, same weight, same states. Do not add per-action
+ * styling here; the interface must not nudge the mentor towards any option.
+ */
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.action-btn {
+  min-height: 44px;
+  padding: 10px 8px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.action-btn:hover {
+  background: var(--bg);
+}
+
+.action-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ stats */
+
+.stats {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stats dt {
+  color: var(--muted);
+}
+
+.stats dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+
+/* ------------------------------------------ collapsible panels (narrow) */
+
+/* Visually hidden but still focusable, so the toggle works by keyboard. */
+.panel-toggle {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.collapsible .panel-heading {
+  margin: 0;
+  cursor: pointer;
+}
+
+.collapsible .panel-heading::before {
+  content: "\25B8";
+  display: inline-block;
+  width: 1em;
+}
+
+.panel-toggle:checked + .panel-heading::before {
+  content: "\25BE";
+}
+
+.panel-toggle:focus-visible + .panel-heading {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.collapsible .panel-body {
+  display: none;
+  margin-top: 8px;
+}
+
+.panel-toggle:checked ~ .panel-body {
+  display: block;
+}
+
+/* ------------------------------------------------------ wide viewports */
+
+@media (min-width: 768px) {
+  .site-main {
+    padding: 24px;
+  }
+
+  .dashboard {
+    grid-template-columns: minmax(240px, 1fr) 2fr;
+    grid-template-areas:
+      "profile     recommendation"
+      "performance demand";
+    align-items: start;
+  }
+
+  .recommendation { grid-area: recommendation; }
+  .demand         { grid-area: demand; }
+  .profile        { grid-area: profile; }
+  .performance    { grid-area: performance; }
+
+  .panel {
+    padding: 18px 20px;
+  }
+
+  .price-value {
+    font-size: 3rem;
+  }
+
+  /* Panels are always expanded; the toggle is removed entirely. */
+  .panel-toggle {
+    display: none;
+  }
+
+  .collapsible .panel-heading {
+    margin-bottom: 8px;
+    cursor: default;
+  }
+
+  .collapsible .panel-heading::before {
+    content: none;
+  }
+
+  .collapsible .panel-body {
+    display: block;
+    margin-top: 0;
+  }
+}
