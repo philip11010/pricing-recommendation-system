@@ -1,0 +1,36 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install dependencies",
+      "type": "shell",
+      "command": "${command:python.interpreterPath} -m pip install -r requirements-dev.txt",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run tests",
+      "type": "shell",
+      "command": "${command:python.interpreterPath} -m pytest tests -v --cov=src --cov-report=term-missing",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Lint",
+      "type": "shell",
+      "command": "${command:python.interpreterPath} -m ruff check src tests && ${command:python.interpreterPath} -m black --check src tests",
+      "problemMatcher": []
+    },
+    {
+      "label": "Format",
+      "type": "shell",
+      "command": "${command:python.interpreterPath} -m black src tests && ${command:python.interpreterPath} -m ruff check --fix src tests",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run API",
+      "type": "shell",
+      "command": "${command:python.interpreterPath} -m uvicorn src.api.main:app --reload --port 8000",
+      "problemMatcher": []
+    }
+  ]
+}
