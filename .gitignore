@@ -1,0 +1,41 @@
+# Data - never commit raw or processed datasets
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Trained model artefacts
+models_store/*
+!models_store/.gitkeep
+*.pkl
+*.joblib
+
+# Environment
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+
+# VS Code - share project config, ignore user-specific state
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
