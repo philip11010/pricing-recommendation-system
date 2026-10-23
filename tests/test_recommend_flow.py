@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from src.api.main import PROXY_BANNER, app, get_model
+from src.api.main import PROXY_BANNER, app, get_model, get_report
 from src.db import Decision, Recommendation, get_engine, reset_engine
 from src.models import train
 from src.models.predict import (
@@ -95,6 +95,12 @@ def fake_model(tmp_path):
                     "number_of_reviews": {"min": 0.0, "max": 50.0},
                     "review_scores_rating": {"min": 4.2, "max": 4.9},
                 },
+                "numeric_medians": {
+                    "accommodates": 4.0,
+                    "number_of_reviews": 20.0,
+                    "review_scores_rating": 4.8,
+                },
+                "categorical_modes": {"room_type": "Entire home/apt"},
             }
         ),
         encoding="utf-8",
@@ -106,9 +112,12 @@ def fake_model(tmp_path):
 def temp_database(tmp_path, monkeypatch):
     """Point the application at a throwaway SQLite file for one test."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'flow.db'}")
-    # Prevent the lifespan from loading the developer's real artefact; the
-    # model reaches the routes through a dependency override instead.
+    # Prevent the lifespan from loading the developer's real artefact or
+    # report; the model reaches the routes through a dependency override, and
+    # a test that wants a report overrides get_report. Without this the real
+    # reports/ directory would decide what the comparison card shows.
     monkeypatch.setattr("src.api.main.try_load_best_model", lambda *a, **k: None)
+    monkeypatch.setattr("src.api.main.load_latest_report", lambda *a, **k: None)
     reset_engine()
     yield
     reset_engine()
@@ -119,6 +128,46 @@ def client(temp_database, fake_model):
     """A client with a model available. Used as a context manager so the
     lifespan runs and the tables are created."""
     app.dependency_overrides[get_model] = lambda: fake_model
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+FAKE_REPORT = {
+    "selection_metric": "rmse_dollars",
+    "best_model": "Linear Regression (Ridge)",
+    "results": [
+        {
+            "model": "Linear Regression (Ridge)",
+            "metrics": METRICS["Linear Regression (Ridge)"],
+            "feature_importances": None,
+        },
+        {
+            "model": "Random Forest",
+            "metrics": METRICS["Random Forest"],
+            # Deliberately ranks number_of_reviews above accommodates, the
+            # opposite of the column order, so a test can tell the form was
+            # ordered by importance rather than by declaration.
+            "feature_importances": [
+                {"feature": "number_of_reviews", "importance": 0.6},
+                {"feature": "accommodates", "importance": 0.3},
+                {"feature": "room_type_Private room", "importance": 0.1},
+            ],
+        },
+        {
+            "model": "XGBoost",
+            "metrics": METRICS["XGBoost"],
+            "feature_importances": None,
+        },
+    ],
+}
+
+
+@pytest.fixture
+def reporting_client(temp_database, fake_model):
+    """A client whose dashboard reads the fake training report."""
+    app.dependency_overrides[get_model] = lambda: fake_model
+    app.dependency_overrides[get_report] = lambda: FAKE_REPORT
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -138,6 +187,15 @@ def session():
     """A session on the same temporary database the client is using."""
     with sessionmaker(bind=get_engine(), expire_on_commit=False)() as session:
         yield session
+
+
+def selected_option(text: str, name: str) -> str | None:
+    """The pre-selected option of a <select>, as the page rendered it."""
+    block = re.search(rf'name="{name}"(.*?)</select>', text, re.S)
+    if not block:
+        return None
+    option = re.search(r'value="([^"]+)"\s*selected', block.group(1))
+    return option.group(1) if option else None
 
 
 def result_panel(response) -> str:
@@ -352,6 +410,32 @@ def test_comparison_card_is_absent_without_a_model(modelless_client):
     assert 'class="panel comparison"' not in modelless_client.get("/").text
 
 
+def test_comparison_card_prefers_the_report_over_the_metadata(reporting_client):
+    """
+    The report carries all three candidates from the run that selected the
+    model, so it is the better source when one is present.
+    """
+    panel = comparison_panel(reporting_client.get("/"))
+
+    assert "517.00" in panel
+    assert "550.00" in panel
+    assert "512.00" in panel
+
+
+def test_comparison_card_marks_the_served_model_not_the_reports_best(
+    reporting_client,
+):
+    """
+    The served artefact decides what "selected" means. The report's own
+    best_model could be from a later run than the artefact on disk.
+    """
+    panel = comparison_panel(reporting_client.get("/"))
+
+    selected_row = [row for row in panel.split("<tr") if "badge" in row]
+    assert len(selected_row) == 1
+    assert "Linear Regression (Ridge)" in selected_row[0]
+
+
 # ---------------------------------------------------------------------------
 # Empty state
 # ---------------------------------------------------------------------------
@@ -380,6 +464,146 @@ def test_empty_state_is_replaced_by_the_real_price(client):
 
     assert "No price yet" not in response.text
     assert "price-value" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Form layout: primary fields, collapsed remainder, prefills, presets
+# ---------------------------------------------------------------------------
+def test_every_input_column_is_still_rendered_somewhere(client):
+    """
+    Collapsing fields must not drop them: the form submits the complete
+    input, so each column appears exactly once whichever half it is in.
+    """
+    text = client.get("/").text
+
+    for column in FEATURES:
+        assert text.count(f'name="{column}"') == 1
+
+
+def test_remaining_fields_sit_in_a_collapsed_details_element(reporting_client):
+    text = reporting_client.get("/").text
+
+    assert '<details class="more-details"' in text
+    # Collapsed by default: no open attribute on the element.
+    assert '<details class="more-details" open' not in text
+
+
+def test_more_details_summary_counts_the_hidden_fields(reporting_client):
+    text = reporting_client.get("/").text
+
+    assert re.search(r"<summary>More details \(\d+ further inputs\)</summary>", text)
+
+
+def test_primary_fields_are_chosen_by_reported_importance(reporting_client):
+    """
+    The fake report ranks number_of_reviews above accommodates, which is the
+    opposite of the declaration order, so position proves the ranking was
+    used rather than the column list.
+    """
+    text = reporting_client.get("/").text
+    collapsed = text.index("<details")
+
+    assert text.index('id="field-number_of_reviews"') < collapsed
+
+
+def test_room_type_and_neighbourhood_are_always_shown_first(client):
+    """
+    Both are forced into the primary set: they are the two inputs a reviewer
+    reaches for, whatever the importances say.
+    """
+    text = client.get("/").text
+    collapsed = text.index("<details") if "<details" in text else len(text)
+
+    assert text.index('id="field-room_type"') < collapsed
+
+
+def test_numeric_inputs_are_prefilled_with_the_training_median(client):
+    """
+    number_of_reviews has a median of 20 in the fake training frame, so the
+    form opens on a submittable listing rather than empty boxes.
+    """
+    text = client.get("/").text
+
+    match = re.search(r'id="field-number_of_reviews"[^>]*value="([^"]*)"', text)
+    assert match and match.group(1) == "20"
+
+
+def test_categorical_inputs_are_prefilled_with_the_training_mode(client):
+    text = client.get("/").text
+
+    assert selected_option(text, "room_type") == "Entire home/apt"
+
+
+def test_the_prefilled_form_submits_without_edits(client, session):
+    """
+    The point of pre-filling from the training centre: whatever the page
+    opens with must be accepted, so a demo cannot start on a 400.
+    """
+    text = client.get("/").text
+    values = dict(re.findall(r'id="field-(\w+)"[^>]*value="([^"]*)"', text))
+    values["room_type"] = selected_option(text, "room_type")
+
+    response = client.post("/recommend", data=values)
+
+    assert response.status_code == 200
+    assert session.scalars(select(Recommendation)).all()
+
+
+def test_preset_values_are_rendered_as_json_for_the_buttons(client):
+    text = client.get("/").text
+
+    raw = re.search(r'id="form-presets">(.*?)</script>', text, re.S).group(1)
+    presets = json.loads(raw)
+    assert set(presets) == {"defaults", "example"}
+    assert set(presets["defaults"]) == set(FEATURES)
+    assert set(presets["example"]) == set(FEATURES)
+
+
+def test_example_listing_differs_from_the_median_defaults(client):
+    """
+    Otherwise the Load example button would appear to do nothing. The example
+    is one coherent listing, not a column-by-column average.
+    """
+    text = client.get("/").text
+    presets = json.loads(
+        re.search(r'id="form-presets">(.*?)</script>', text, re.S).group(1)
+    )
+
+    assert presets["example"] != presets["defaults"]
+
+
+def test_example_listing_stays_inside_the_accepted_ranges(client):
+    """
+    The example is written by hand, so it is clamped to the training range.
+    An example the form would then refuse is worse than no example.
+    """
+    text = client.get("/").text
+    presets = json.loads(
+        re.search(r'id="form-presets">(.*?)</script>', text, re.S).group(1)
+    )
+
+    response = client.post("/recommend", data=presets["example"])
+
+    assert response.status_code == 200
+
+
+def test_load_example_and_reset_buttons_are_present_and_not_submits(client):
+    text = client.get("/").text
+
+    assert "data-load-example" in text
+    assert "data-reset-form" in text
+    # Neither may submit the form, and neither may be a decision control.
+    for marker in ("data-load-example", "data-reset-form"):
+        button = re.search(r"<button[^>]*" + marker + r"[^>]*>", text).group(0)
+        assert 'type="button"' in button
+        assert "name=" not in button.replace("data-announce", "")
+
+
+def test_each_field_carries_its_mentor_platform_equivalent(client):
+    text = client.get("/").text
+
+    assert text.count('class="field-help"') == len(FEATURES)
+    assert "Review count stands in for total sessions reviewed" in text
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +757,38 @@ def test_reject_discards_a_price_left_in_the_box(client, session):
     )
 
     assert session.scalars(select(Decision)).one().final_price is None
+
+
+def test_modify_error_is_shown_beside_the_price_box(client):
+    """
+    The error must attach to final_price, not to the model as a whole, or it
+    can only appear in the summary and not next to the control at fault.
+    """
+    rec_id = make_recommendation(client)
+
+    response = client.post(
+        "/decision", data={"recommendation_id": rec_id, "decision": "modify"}
+    )
+
+    assert 'id="error-final-price"' in response.text
+    assert 'aria-describedby="error-final-price"' in response.text
+
+
+def test_modify_without_the_price_field_at_all_is_rejected(client, session):
+    """
+    A form that omits the price box leaves final_price at its default.
+    Pydantic skips validators for an unsupplied field unless asked, so
+    without validate_default this reached the database CHECK constraint and
+    raised a 500 instead of showing a message.
+    """
+    rec_id = make_recommendation(client)
+
+    response = client.post(
+        "/decision", data={"recommendation_id": rec_id, "decision": "modify"}
+    )
+
+    assert response.status_code == 400
+    assert session.scalars(select(Decision)).all() == []
 
 
 def test_modify_without_a_number_is_rejected(client, session):

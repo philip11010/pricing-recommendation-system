@@ -40,8 +40,9 @@ from src.api.schema import (
     DecisionRequest,
     build_request_model,
     clean_form_values,
+    example_listing_values,
     example_values,
-    grouped_field_specs,
+    form_sections,
     readable_errors,
 )
 from src.db import Decision, Recommendation, get_session, init_db
@@ -51,12 +52,16 @@ from src.models.predict import (
     predict_price,
     try_load_best_model,
 )
+from src.models.report import comparison_rows, load_latest_report, raw_feature_ranking
 
 API_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = API_DIR / "templates"
 STATIC_DIR = API_DIR / "static"
 
 HISTORY_LIMIT = 20
+
+# The dashboard shows a short tail of decisions; /history shows the full page.
+RECENT_LIMIT = 5
 
 # Shown on every page. The proxy dataset is the single most important caveat
 # about this prototype, so it is part of the layout rather than a footnote.
@@ -82,6 +87,7 @@ async def lifespan(app: FastAPI):
     """
     init_db()
     app.state.model = try_load_best_model()
+    app.state.report = load_latest_report()
     app.state.request_model = None
     app.state.request_model_for = None
     yield
@@ -100,6 +106,17 @@ def get_model(request: Request) -> LoadedModel | None:
     a model, or the absence of one, without touching the filesystem.
     """
     return getattr(request.app.state, "model", None)
+
+
+def get_report(request: Request) -> dict[str, Any] | None:
+    """
+    The newest training report, or None if ``reports/`` holds none.
+
+    Loaded at startup like the model. It supplies the model comparison and
+    the feature importances that order the form, both of which are display
+    concerns, so its absence degrades the page rather than breaking it.
+    """
+    return getattr(request.app.state, "report", None)
 
 
 def get_request_model(
@@ -126,56 +143,81 @@ def get_request_model(
     return cached
 
 
-# ---------------------------------------------------------------------------
-# Placeholder context
-#
-# Stands in for a real mentor record. The platform dataset has not been
-# received, so the profile, performance and demand panels still show fixed
-# values. There is deliberately no placeholder price: the only figure the
-# dashboard shows is model output, in USD. Before a prediction exists the
-# panel shows an empty state instead.
-# ---------------------------------------------------------------------------
-PLACEHOLDER_DASHBOARD: dict = {
-    "profile": {
-        "name": "Placeholder Mentor",
-        "specialisation": "Data Science",
-        "experience_years": 6,
-        "education": "MSc Computer Science",
-        "certifications": 2,
-    },
-    "performance": {
-        "rating": 4.7,
-        "reviews": 38,
-        "completion_rate": 0.96,
-        "repeat_booking_rate": 0.41,
-    },
-    "demand": {
-        "profile_views_30d": 312,
-        "booking_requests_30d": 17,
-        "skill_demand_trend": "Rising",
-    },
-}
-
-
 def page_context(
-    request: Request, model: LoadedModel | None, **extra: Any
+    request: Request,
+    model: LoadedModel | None,
+    report: dict[str, Any] | None = None,
+    **extra: Any,
 ) -> dict[str, Any]:
-    """Context shared by every page: the banner, the form fields, the model."""
+    """
+    Context shared by every page: the banner, the form fields, the model.
+
+    The model comparison prefers the training report, which carries all three
+    candidates with their tuned parameters. It falls back to the ``all_models``
+    block in the model metadata, so the card still renders from the artefact
+    alone when ``reports/`` is empty.
+    """
+    sections = (
+        form_sections(model, raw_feature_ranking(report, model.input_columns))
+        if model
+        else {}
+    )
+    comparison = comparison_rows(report, model.model_name if model else None)
+    if not comparison and model is not None:
+        comparison = model.model_comparison
+
+    defaults = example_values(model) if model else {}
     context: dict[str, Any] = {
-        **PLACEHOLDER_DASHBOARD,
         "banner": PROXY_BANNER,
         "model_loaded": model is not None,
         "model_name": model.model_name if model else None,
         "trained_at": model.trained_at if model else None,
-        "field_groups": grouped_field_specs(model) if model else [],
-        "values": example_values(model) if model else {},
-        "model_comparison": model.model_comparison if model else [],
+        "form_primary": sections.get("primary", []),
+        "form_more": sections.get("more", []),
+        "values": defaults,
+        # Handed to dashboard.js as JSON, for the Reset and Load example
+        # buttons. Serialised here rather than in the template so the page
+        # needs no inline script.
+        "form_presets": json.dumps(
+            {
+                "defaults": defaults,
+                "example": example_listing_values(model) if model else {},
+            },
+            sort_keys=True,
+        ),
+        "model_comparison": comparison if model is not None else [],
         "errors": [],
         "prediction": None,
         "confirmation": None,
+        "recent": [],
     }
     context.update(extra)
+    # Keyed by field for the inline messages beside each control. The first
+    # error per field wins; the summary panel above the form lists them all,
+    # including any that belong to no visible control.
+    field_errors: dict[str, str] = {}
+    for error in context.get("errors") or []:
+        name = error.get("field")
+        if name and name not in field_errors:
+            field_errors[name] = error.get("message", "")
+    context["field_errors"] = field_errors
     return context
+
+
+def recent_recommendations(session: Session, limit: int) -> list[Recommendation]:
+    """
+    The most recent recommendations, newest first, with their decisions.
+
+    Ordered by id as well as timestamp: two rows written in the same clock
+    tick would otherwise come back in an arbitrary order.
+    """
+    statement = (
+        select(Recommendation)
+        .options(selectinload(Recommendation.decisions))
+        .order_by(Recommendation.created_at.desc(), Recommendation.id.desc())
+        .limit(limit)
+    )
+    return list(session.scalars(statement))
 
 
 def model_unavailable(request: Request) -> HTMLResponse:
@@ -183,7 +225,7 @@ def model_unavailable(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "model_unavailable.html",
-        page_context(request, None, message=MODEL_UNAVAILABLE_MESSAGE),
+        page_context(request, None, None, message=MODEL_UNAVAILABLE_MESSAGE),
         status_code=503,
     )
 
@@ -193,7 +235,10 @@ def model_unavailable(request: Request) -> HTMLResponse:
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(
-    request: Request, model: LoadedModel | None = Depends(get_model)
+    request: Request,
+    model: LoadedModel | None = Depends(get_model),
+    report: dict[str, Any] | None = Depends(get_report),
+    session: Session = Depends(get_session),
 ) -> HTMLResponse:
     """
     Render the dashboard and its input form.
@@ -202,7 +247,14 @@ async def dashboard(
     Only the prediction endpoint refuses to answer.
     """
     return templates.TemplateResponse(
-        request, "dashboard.html", page_context(request, model)
+        request,
+        "dashboard.html",
+        page_context(
+            request,
+            model,
+            report,
+            recent=recent_recommendations(session, RECENT_LIMIT),
+        ),
     )
 
 
@@ -210,6 +262,7 @@ async def dashboard(
 async def recommend(
     request: Request,
     model: LoadedModel | None = Depends(get_model),
+    report: dict[str, Any] | None = Depends(get_report),
     request_model: type[BaseModel] | None = Depends(get_request_model),
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
@@ -231,7 +284,12 @@ async def recommend(
             request,
             "dashboard.html",
             page_context(
-                request, model, values=submitted, errors=readable_errors(error)
+                request,
+                model,
+                report,
+                values=submitted,
+                errors=readable_errors(error),
+                recent=recent_recommendations(session, RECENT_LIMIT),
             ),
             status_code=INVALID_INPUT_STATUS,
         )
@@ -246,8 +304,10 @@ async def recommend(
             page_context(
                 request,
                 model,
+                report,
                 values=submitted,
                 errors=[{"field": "", "label": "Model", "message": str(error)}],
+                recent=recent_recommendations(session, RECENT_LIMIT),
             ),
             status_code=INVALID_INPUT_STATUS,
         )
@@ -267,7 +327,9 @@ async def recommend(
         page_context(
             request,
             model,
+            report,
             values=values,
+            recent=recent_recommendations(session, RECENT_LIMIT),
             prediction={
                 "id": record.id,
                 "price": price,
@@ -284,6 +346,7 @@ async def recommend(
 async def decide(
     request: Request,
     model: LoadedModel | None = Depends(get_model),
+    report: dict[str, Any] | None = Depends(get_report),
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
     """
@@ -302,7 +365,12 @@ async def decide(
             request,
             "dashboard.html",
             page_context(
-                request, model, values=submitted, errors=readable_errors(error)
+                request,
+                model,
+                report,
+                values=submitted,
+                errors=readable_errors(error),
+                recent=recent_recommendations(session, RECENT_LIMIT),
             ),
             status_code=INVALID_INPUT_STATUS,
         )
@@ -315,6 +383,8 @@ async def decide(
             page_context(
                 request,
                 model,
+                report,
+                recent=recent_recommendations(session, RECENT_LIMIT),
                 errors=[
                     {
                         "field": "recommendation_id",
@@ -347,6 +417,7 @@ async def decide(
         page_context(
             request,
             model,
+            report,
             confirmation={
                 "action": record.action,
                 "final_price": record.final_price,
@@ -361,26 +432,20 @@ async def decide(
 async def history(
     request: Request,
     model: LoadedModel | None = Depends(get_model),
+    report: dict[str, Any] | None = Depends(get_report),
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
-    """
-    The most recent recommendations, newest first, with their decisions.
-
-    Ordered by id as well as timestamp: two rows written in the same clock
-    tick would otherwise come back in an arbitrary order.
-    """
-    statement = (
-        select(Recommendation)
-        .options(selectinload(Recommendation.decisions))
-        .order_by(Recommendation.created_at.desc(), Recommendation.id.desc())
-        .limit(HISTORY_LIMIT)
-    )
-    records = list(session.scalars(statement))
-
+    """The most recent recommendations, newest first, with their decisions."""
     return templates.TemplateResponse(
         request,
         "history.html",
-        page_context(request, model, records=records, limit=HISTORY_LIMIT),
+        page_context(
+            request,
+            model,
+            report,
+            records=recent_recommendations(session, HISTORY_LIMIT),
+            limit=HISTORY_LIMIT,
+        ),
     )
 
 

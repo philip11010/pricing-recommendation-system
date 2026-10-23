@@ -16,8 +16,9 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 MODEL_STORE_DIR = PROJECT_ROOT / "models_store"
+REPORTS_DIR = PROJECT_ROOT / "reports"
 
-for _directory in (RAW_DATA_DIR, PROCESSED_DATA_DIR, MODEL_STORE_DIR):
+for _directory in (RAW_DATA_DIR, PROCESSED_DATA_DIR, MODEL_STORE_DIR, REPORTS_DIR):
     _directory.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------

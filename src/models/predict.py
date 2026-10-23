@@ -81,6 +81,24 @@ class LoadedModel:
         }
 
     @property
+    def numeric_medians(self) -> dict[str, float]:
+        """
+        Training-split median per numeric column, for pre-filling the form.
+
+        Empty for metadata written before the serving layer, so a caller must
+        treat an absent column as "no default available" rather than assuming
+        zero.
+        """
+        medians = self.metadata.get("numeric_medians", {})
+        return {str(column): float(value) for column, value in medians.items()}
+
+    @property
+    def categorical_modes(self) -> dict[str, str]:
+        """Most common training value per categorical column."""
+        modes = self.metadata.get("categorical_modes", {})
+        return {str(column): str(value) for column, value in modes.items()}
+
+    @property
     def data_source(self) -> str:
         return str(self.metadata.get("data_source", DATA_SOURCE))
 

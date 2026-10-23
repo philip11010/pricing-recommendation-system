@@ -4,12 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Mentor Pricing{% endblock %}</title>
+  {# Everything is served from this app: no CDN, no webfont fetch, so the
+     demo renders identically with no network. #}
   <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}">
 </head>
 <body>
   <header class="site-header">
     <span class="site-title">Career Mentor &middot; Pricing</span>
-    <nav class="site-nav">
+    <span class="pill">Proxy data</span>
+    <nav class="site-nav" aria-label="Main">
       <a href="{{ url_for('dashboard') }}">Dashboard</a>
       <a href="{{ url_for('history') }}">History</a>
     </nav>
@@ -20,7 +23,10 @@
     role="note" rather than role="alert": it is standing context, so it should
     not interrupt a screen reader mid-task on each navigation.
   #}
-  <p class="proxy-banner" role="note">{{ banner }}</p>
+  <p class="proxy-banner" role="note">
+    <strong>Proxy dataset.</strong>
+    <span>{{ banner }}</span>
+  </p>
 
   {% if model_loaded is defined and not model_loaded %}
   <p class="model-warning" role="status">
@@ -32,5 +38,7 @@
   <main class="site-main">
     {% block content %}{% endblock %}
   </main>
+
+  <script src="{{ url_for('static', path='js/dashboard.js') }}"></script>
 </body>
 </html>

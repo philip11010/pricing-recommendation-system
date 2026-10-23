@@ -5,7 +5,10 @@
 {% block content %}
 <div class="dashboard single-column">
   <section class="panel" aria-labelledby="confirmation-heading">
-    <h2 id="confirmation-heading" class="panel-heading">Decision recorded</h2>
+    <div class="panel-head">
+      <h2 id="confirmation-heading" class="panel-heading">Decision recorded</h2>
+      <span class="tag tag-{{ confirmation.action }}">{{ confirmation.action }}</span>
+    </div>
 
     {% if confirmation.action == "accept" %}
     <p class="confirmation-line">
@@ -27,14 +30,13 @@
     </p>
     {% endif %}
 
-    <p class="price-context">
+    <p class="panel-note">
       Recorded against recommendation #{{ confirmation.recommendation_id }}.
     </p>
-    <p>
-      <a href="{{ url_for('dashboard') }}">Back to the dashboard</a>
-      &middot;
-      <a href="{{ url_for('history') }}">See history</a>
-    </p>
+    <div class="form-actions">
+      <a class="btn btn-primary" href="{{ url_for('dashboard') }}">Back to the dashboard</a>
+      <a class="btn btn-secondary" href="{{ url_for('history') }}">See history</a>
+    </div>
   </section>
 </div>
 {% endblock %}

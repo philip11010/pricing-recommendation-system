@@ -2,207 +2,291 @@
 
 {% block title %}Pricing Dashboard &middot; Mentor Pricing{% endblock %}
 
-{% block content %}
-{#
-  DOM order puts the recommendation first so that on narrow viewports the
-  price and the three actions sit at the top of the page. On wide viewports
-  CSS grid areas place the profile and performance panels in the left column.
-#}
-<div class="dashboard">
-
-  <section class="panel recommendation" aria-labelledby="recommendation-heading">
-    <h2 id="recommendation-heading" class="panel-heading">Suggested session price</h2>
-
-    {% if prediction %}
-    <p class="price">
-      <span class="price-currency">USD</span>
-      <span class="price-value">{{ "{:,.2f}".format(prediction.price) }}</span>
-    </p>
-    {% if prediction.typical_error is not none %}
-    {#
-      MAE, not RMSE. MAE averages the absolute errors, so it reads as "about
-      this much out" on one prediction. RMSE on this data is roughly four
-      times larger because a few listings up to $52,850 dominate the squared
-      term, and quoting it here would overstate the error on a typical price.
-      RMSE belongs in the comparison card below, where models are ranked.
-    #}
-    <p class="price-error">
-      Typical error about
-      <strong>${{ "{:,.0f}".format(prediction.typical_error) }}</strong>
-      on the held-out test set.
-    </p>
-    {% endif %}
-    <p class="price-context">
-      Model output from {{ prediction.model_name }}, trained on
-      {{ prediction.data_source }}. Recommendation #{{ prediction.id }}.
-    </p>
-    {% else %}
-    <p class="empty-state">
-      No price yet. Fill in the listing inputs below and submit the form to
-      get a recommended price from the trained model.
-    </p>
-    {% endif %}
-
-    <p class="advisory-note">
-      This price is advisory. You decide whether to accept it, change it, or
-      keep your own.
-    </p>
-
-    {# The three actions share one class and identical markup so that no
-       option is visually emphasised over the others. They are disabled until
-       there is a real recommendation to respond to. #}
-    <form class="decision-form" method="post" action="{{ url_for('decide') }}">
-      <input type="hidden" name="recommendation_id"
-             value="{{ prediction.id if prediction else '' }}">
-      <label class="field modify-price">
-        <span class="field-label">New price (USD), for Modify</span>
-        <input type="number" name="final_price" min="0.01" step="0.01"
-               {% if not prediction %}disabled{% endif %}>
-      </label>
-      <div class="actions" role="group" aria-label="Respond to the suggested price">
-        <button type="submit" class="action-btn" name="decision" value="accept"
-                {% if not prediction %}disabled{% endif %}>Accept</button>
-        <button type="submit" class="action-btn" name="decision" value="modify"
-                {% if not prediction %}disabled{% endif %}>Modify</button>
-        <button type="submit" class="action-btn" name="decision" value="reject"
-                {% if not prediction %}disabled{% endif %}>Reject</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="panel form-panel" aria-labelledby="inputs-heading">
-    <h2 id="inputs-heading" class="panel-heading">Listing inputs</h2>
-
-    {% if errors %}
-    <div class="errors" role="alert">
-      <p class="errors-heading">{{ errors | length }} problem(s) with the input:</p>
-      <ul>
-        {% for error in errors %}
-        <li><strong>{{ error.label }}</strong>: {{ error.message }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-
-    {% if field_groups %}
-    <p class="form-help">
-      Fields come from the feature list the model was trained on. Numeric
-      ranges are the range seen in training; a value outside it is refused
-      because the model has no evidence there. Leave the review scores blank
-      for a listing with no reviews.
-    </p>
-    <form method="post" action="{{ url_for('recommend') }}">
-      {% for category, specs in field_groups %}
-      <fieldset class="field-group">
-        <legend>{{ category }}</legend>
-        {% for spec in specs %}
-        <label class="field" for="field-{{ spec.name }}">
-          <span class="field-label">
-            {{ spec.label }}{% if not spec.required %} <span class="optional">(optional)</span>{% endif %}
-          </span>
-          {% if spec.kind == "choice" %}
-          <select id="field-{{ spec.name }}" name="{{ spec.name }}" required>
-            {% for choice in spec.choices %}
-            <option value="{{ choice }}"
-              {% if values.get(spec.name) | string == choice %}selected{% endif %}>{{ choice }}</option>
-            {% endfor %}
-          </select>
-          {% else %}
-          <input type="number" id="field-{{ spec.name }}" name="{{ spec.name }}"
-                 value="{{ values.get(spec.name) if values.get(spec.name) is not none else '' }}"
-                 step="{{ spec.step }}"
-                 {% if spec.minimum is not none %}min="{{ spec.minimum }}"{% endif %}
-                 {% if spec.maximum is not none %}max="{{ spec.maximum }}"{% endif %}
-                 {% if spec.range_hint %}aria-describedby="hint-{{ spec.name }}"{% endif %}
-                 {% if spec.required %}required{% endif %}>
-          {% if spec.range_hint %}
-          {# Always visible, and tied to the input with aria-describedby, so
-             the limit is known before submitting rather than discovered by
-             being refused. #}
-          <span class="field-hint" id="hint-{{ spec.name }}">{{ spec.range_hint }}</span>
-          {% endif %}
-          {% endif %}
-        </label>
-        {% endfor %}
-      </fieldset>
+{% macro field_control(spec, values, field_errors) %}
+  {% set error = field_errors.get(spec.name) %}
+  <div class="field{% if error %} has-error{% endif %}">
+    <label class="field-label" for="field-{{ spec.name }}">
+      {{ spec.label }}{% if not spec.required %} <span class="optional">(optional)</span>{% endif %}
+    </label>
+    {% if spec.kind == "choice" %}
+    <select id="field-{{ spec.name }}" name="{{ spec.name }}" required
+            {% if error %}aria-invalid="true" aria-describedby="error-{{ spec.name }}"{% endif %}>
+      {% for choice in spec.choices %}
+      <option value="{{ choice }}"
+        {% if values.get(spec.name) | string == choice %}selected{% endif %}>{{ choice }}</option>
       {% endfor %}
-      <button type="submit" class="submit-btn">Get recommended price</button>
-    </form>
+    </select>
+    {% else %}
+    <input type="number" id="field-{{ spec.name }}" name="{{ spec.name }}"
+           value="{{ values.get(spec.name) if values.get(spec.name) is not none else '' }}"
+           step="{{ spec.step }}"
+           {% if spec.minimum is not none %}min="{{ spec.minimum }}"{% endif %}
+           {% if spec.maximum is not none %}max="{{ spec.maximum }}"{% endif %}
+           {% if error %}aria-invalid="true"{% endif %}
+           {% if spec.range_hint or error %}aria-describedby="{% if error %}error-{{ spec.name }} {% endif %}hint-{{ spec.name }}"{% endif %}
+           {% if spec.required %}required{% endif %}>
     {% endif %}
-  </section>
+    {% if error %}
+    <span class="field-error" id="error-{{ spec.name }}">{{ error }}</span>
+    {% endif %}
+    {% if spec.help_text %}
+    <span class="field-help">{{ spec.help_text }}</span>
+    {% endif %}
+    {% if spec.range_hint %}
+    {# Always visible, and tied to the input with aria-describedby, so
+       the limit is known before submitting rather than discovered by
+       being refused. #}
+    <span class="field-hint" id="hint-{{ spec.name }}">{{ spec.range_hint }}</span>
+    {% endif %}
+  </div>
+{% endmacro %}
 
-  {% if model_comparison %}
-  <section class="panel comparison" aria-labelledby="comparison-heading">
-    <h2 id="comparison-heading" class="panel-heading">Model comparison</h2>
-    <p class="panel-note">
-      Held-out test set metrics for the three candidate models. RMSE is the
-      selection criterion and is reported here only: it squares the errors, so
-      a few very expensive listings dominate it, which makes it the right
-      number for ranking models and the wrong one for describing the error on
-      a single price.
-    </p>
-    <table class="comparison-table">
-      <thead>
-        <tr>
-          <th scope="col">Model</th>
-          <th scope="col">RMSE (USD)</th>
-          <th scope="col">MAE (USD)</th>
-          <th scope="col">R2</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in model_comparison %}
-        <tr{% if row.is_selected %} class="is-selected"{% endif %}>
-          <td>
-            {{ row.model_name }}
-            {%- if row.is_selected %} <span class="badge">selected</span>{% endif %}
-          </td>
-          <td>{{ "{:,.2f}".format(row.rmse_dollars) }}</td>
-          <td>{{ "{:,.2f}".format(row.mae_dollars) }}</td>
-          <td>{{ "{:.3f}".format(row.r2_dollars) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
-  {% endif %}
-
-  <section class="panel demand" aria-labelledby="demand-heading">
-    <h2 id="demand-heading" class="panel-heading">Demand signals</h2>
-    <p class="panel-note">Placeholder values; the platform dataset is not yet available.</p>
-    <dl class="stats">
-      <div><dt>Profile views (30 days)</dt><dd>{{ demand.profile_views_30d }}</dd></div>
-      <div><dt>Booking requests (30 days)</dt><dd>{{ demand.booking_requests_30d }}</dd></div>
-      <div><dt>Skill demand trend</dt><dd>{{ demand.skill_demand_trend }}</dd></div>
-    </dl>
-  </section>
-
-  <section class="panel collapsible profile">
-    <input type="checkbox" id="toggle-profile" class="panel-toggle">
-    <label for="toggle-profile" class="panel-heading">Profile summary</label>
-    <div class="panel-body">
-      <dl class="stats">
-        <div><dt>Name</dt><dd>{{ profile.name }}</dd></div>
-        <div><dt>Specialisation</dt><dd>{{ profile.specialisation }}</dd></div>
-        <div><dt>Experience</dt><dd>{{ profile.experience_years }} years</dd></div>
-        <div><dt>Education</dt><dd>{{ profile.education }}</dd></div>
-        <div><dt>Certifications</dt><dd>{{ profile.certifications }}</dd></div>
-      </dl>
+{% macro field_sections(groups, values, field_errors) %}
+  {% for category, specs in groups %}
+  <fieldset class="field-group">
+    <legend>{{ category }}</legend>
+    <div class="field-grid">
+      {% for spec in specs %}{{ field_control(spec, values, field_errors) }}{% endfor %}
     </div>
-  </section>
+  </fieldset>
+  {% endfor %}
+{% endmacro %}
 
-  <section class="panel collapsible performance">
-    <input type="checkbox" id="toggle-performance" class="panel-toggle">
-    <label for="toggle-performance" class="panel-heading">Performance</label>
-    <div class="panel-body">
-      <dl class="stats">
-        <div><dt>Rating</dt><dd>{{ performance.rating }} / 5</dd></div>
-        <div><dt>Reviews</dt><dd>{{ performance.reviews }}</dd></div>
-        <div><dt>Completion rate</dt><dd>{{ "%.0f"|format(performance.completion_rate * 100) }}%</dd></div>
-        <div><dt>Repeat booking rate</dt><dd>{{ "%.0f"|format(performance.repeat_booking_rate * 100) }}%</dd></div>
-      </dl>
+{% block content %}
+<div class="page">
+
+  <div class="dashboard">
+
+    {# ------------------------------------------------------- left column #}
+    <section class="panel form-panel" aria-labelledby="inputs-heading">
+      <div class="panel-head">
+        <h2 id="inputs-heading" class="panel-heading">Listing details</h2>
+      </div>
+
+      {% if errors %}
+      <div class="errors" role="alert">
+        <p class="errors-heading">{{ errors | length }} problem(s) with the input:</p>
+        <ul>
+          {% for error in errors %}
+          <li><strong>{{ error.label }}</strong>: {{ error.message }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if form_primary or form_more %}
+      <p class="form-help">
+        Pre-filled with the training median of each column, so the form always
+        holds a submittable listing. The grey line under each field gives its
+        mentor-platform equivalent; the smaller line gives the range seen in
+        training, outside which the model has no evidence and the input is
+        refused.
+      </p>
+
+      <form method="post" action="{{ url_for('recommend') }}"
+            data-input-form data-loading>
+        {{ field_sections(form_primary, values, field_errors) }}
+
+        {% if form_more %}
+        <details class="more-details">
+          <summary>More details ({{ form_more | map(attribute='1') | map('length') | sum }} further inputs)</summary>
+          <div class="more-details-body">
+            {{ field_sections(form_more, values, field_errors) }}
+          </div>
+        </details>
+        {% endif %}
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Get recommendation</button>
+          <button type="button" class="btn btn-quiet" data-load-example
+                  data-announce="Form filled with the example listing.">
+            Load example listing
+          </button>
+          <button type="button" class="btn btn-quiet" data-reset-form
+                  data-announce="Form reset to the training medians.">
+            Reset
+          </button>
+        </div>
+        <p class="sr-status" id="form-status" role="status" aria-live="polite"></p>
+      </form>
+
+      {# Values for the two preset buttons, rendered as data so the page
+         needs no inline script. #}
+      <script type="application/json" id="form-presets">{{ form_presets | safe }}</script>
+      {% endif %}
+    </section>
+
+    {# ------------------------------------------------------ right column #}
+    <div class="column column-result">
+      <section class="panel recommendation" aria-labelledby="recommendation-heading">
+        <div class="panel-head">
+          <h2 id="recommendation-heading" class="panel-heading">Recommendation</h2>
+          {% if model_name %}<span class="pill">{{ model_name }}</span>{% endif %}
+        </div>
+
+        {% if prediction %}
+        <p class="price">
+          <span class="price-currency">USD</span>
+          <span class="price-value">{{ "{:,.2f}".format(prediction.price) }}</span>
+        </p>
+        {% if prediction.typical_error is not none %}
+        {#
+          MAE, not RMSE. MAE averages the absolute errors, so it reads as
+          "about this much out" on one prediction. RMSE on this data is
+          roughly four times larger because a few listings up to $52,850
+          dominate the squared term, and quoting it here would overstate the
+          error on a typical price. RMSE belongs in the comparison card,
+          where models are ranked against each other.
+        #}
+        <p class="price-error">
+          Typical error about
+          <strong>${{ "{:,.0f}".format(prediction.typical_error) }}</strong>
+          on the held-out test set.
+        </p>
+        {% endif %}
+        <p class="price-context">
+          {{ prediction.model_name }}, trained on {{ prediction.data_source }}.
+          Recommendation #{{ prediction.id }}.
+        </p>
+        {% else %}
+        <p class="empty-state">
+          No price yet. Fill in the details and press Get recommendation.
+        </p>
+        {% endif %}
+
+        <p class="advisory-note">
+          This price is advisory. You decide whether to accept it, change it,
+          or keep your own.
+        </p>
+
+        {# Exactly three controls carry name="decision", one per action, so
+           the submitted value is unambiguous. Confirm re-submits through the
+           Modify button rather than adding a fourth. #}
+        <form class="decision-form" method="post" action="{{ url_for('decide') }}"
+              data-decision-form data-loading>
+          <input type="hidden" name="recommendation_id"
+                 value="{{ prediction.id if prediction else '' }}">
+
+          <div class="modify-panel" data-modify-panel>
+            <div class="field{% if field_errors.get('final_price') %} has-error{% endif %}">
+              <label class="field-label" for="field-final-price">New price (USD)</label>
+              <input type="number" id="field-final-price" name="final_price"
+                     min="0.01" step="0.01"
+                     {% if not prediction %}disabled{% endif %}
+                     {% if field_errors.get('final_price') %}aria-invalid="true" aria-describedby="error-final-price"{% endif %}>
+              {% if field_errors.get('final_price') %}
+              <span class="field-error" id="error-final-price">{{ field_errors.get('final_price') }}</span>
+              {% endif %}
+            </div>
+            <button type="button" class="btn btn-primary confirm-btn" data-confirm-modify
+                    {% if not prediction %}disabled{% endif %}>Confirm</button>
+          </div>
+
+          <div class="actions" role="group" aria-label="Respond to the suggested price">
+            <button type="submit" class="action-btn btn btn-primary" name="decision" value="accept"
+                    {% if not prediction %}disabled{% endif %}>Accept</button>
+            <button type="submit" class="action-btn btn btn-secondary" name="decision" value="modify"
+                    aria-expanded="false"
+                    {% if not prediction %}disabled{% endif %}>Modify</button>
+            <button type="submit" class="action-btn btn btn-ghost" name="decision" value="reject"
+                    {% if not prediction %}disabled{% endif %}>Reject</button>
+          </div>
+        </form>
+      </section>
     </div>
-  </section>
+  </div>
 
+  {# ----------------------------------------------------- secondary row #}
+  <div class="dashboard">
+
+    <section class="panel" aria-labelledby="recent-heading">
+      <div class="panel-head">
+        <h2 id="recent-heading" class="panel-heading">Recent decisions</h2>
+        <a href="{{ url_for('history') }}">Full history</a>
+      </div>
+      {% if recent %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Recommended</th>
+              <th scope="col">Decision</th>
+              <th scope="col">Final</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for record in recent %}
+            {% set decision = record.decisions[-1] if record.decisions else none %}
+            <tr>
+              <td>{{ record.id }}</td>
+              <td class="numeric">${{ "{:,.2f}".format(record.predicted_price) }}</td>
+              <td>
+                {% if decision %}
+                <span class="tag tag-{{ decision.action }}">{{ decision.action }}</span>
+                {% else %}
+                <span class="muted">pending</span>
+                {% endif %}
+              </td>
+              <td class="numeric">
+                {% if decision and decision.final_price is not none %}
+                ${{ "{:,.2f}".format(decision.final_price) }}
+                {% else %}
+                <span class="muted">&mdash;</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="panel-note">
+        No decisions recorded yet. They appear here once you respond to a
+        recommendation.
+      </p>
+      {% endif %}
+    </section>
+
+    {% if model_comparison %}
+    <section class="panel comparison" aria-labelledby="comparison-heading">
+      <div class="panel-head">
+        <h2 id="comparison-heading" class="panel-heading">Model comparison</h2>
+      </div>
+      <p class="panel-note">
+        Held-out test set, all three candidates. RMSE is the selection
+        criterion and is reported here only: it squares the errors, so a few
+        very expensive listings dominate it, which makes it the right number
+        for ranking models and the wrong one for describing the error on a
+        single price.
+      </p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Model</th>
+              <th scope="col" class="numeric">RMSE (USD)</th>
+              <th scope="col" class="numeric">MAE (USD)</th>
+              <th scope="col" class="numeric">R2</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in model_comparison %}
+            <tr{% if row.is_selected %} class="is-selected"{% endif %}>
+              <td>
+                {{ row.model_name }}
+                {%- if row.is_selected %} <span class="badge">selected</span>{% endif %}
+              </td>
+              <td class="numeric">{{ "{:,.2f}".format(row.rmse_dollars) }}</td>
+              <td class="numeric">{{ "{:,.2f}".format(row.mae_dollars) }}</td>
+              <td class="numeric">{{ "{:.3f}".format(row.r2_dollars) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}

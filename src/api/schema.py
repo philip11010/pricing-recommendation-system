@@ -27,8 +27,9 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    ValidationInfo,
     create_model,
-    model_validator,
+    field_validator,
 )
 
 from src import config
@@ -103,6 +104,47 @@ DECISION_LABELS: dict[str, str] = {
     "final_price": "New price",
 }
 
+# What each proxy column stands in for on the mentor platform. The dataset is
+# Airbnb listings, so without this the form reads as a holiday-let form; the
+# helper line is what makes the structural analogy visible at the point of
+# entry rather than only in the write-up.
+FIELD_HELP: dict[str, str] = {
+    "hosts_time_as_host_years": "Host tenure stands in for mentor experience",
+    "hosts_time_as_host_months": "Extra months of tenure, on top of the years",
+    "host_identity_verified": "Identity check stands in for a verified credential",
+    "host_has_profile_pic": "Profile completeness signal",
+    "host_listings_count": "Portfolio size stands in for a mentor's session load",
+    "room_type": "Listing type stands in for mentorship specialisation",
+    "accommodates": "Capacity stands in for group session size",
+    "bedrooms": "Scale of the offering",
+    "bathrooms": "Scale of the offering",
+    "beds": "Scale of the offering",
+    "review_scores_rating": "Overall review score stands in for session rating",
+    "review_scores_accuracy": "Accuracy score stands in for expectation matching",
+    "review_scores_communication": "Communication score, as for a mentor",
+    "review_scores_value": "Value score stands in for perceived value for money",
+    "number_of_reviews": "Review count stands in for total sessions reviewed",
+    "host_is_superhost": "Superhost status stands in for top-mentor status",
+    "availability_30": "Open nights stand in for open booking slots",
+    "availability_90": "Open nights stand in for open booking slots",
+    "availability_365": "Open nights stand in for open booking slots",
+    "number_of_reviews_ltm": "Recent reviews stand in for booking requests",
+    "number_of_reviews_l30d": "Last 30 days, a short-run demand signal",
+    "reviews_per_month": "Review velocity stands in for booking demand",
+    "neighbourhood_cleansed": "Neighbourhood average stands in for the market benchmark",
+    "latitude": "Location, part of the market benchmark",
+    "longitude": "Location, part of the market benchmark",
+}
+
+# Columns the form always shows first, whatever the importances say.
+# room_type carries the coarsest price signal in the data, and the
+# neighbourhood is the market benchmark, so a demo that hid either would be
+# missing the two inputs a reviewer will reach for first.
+REQUIRED_PRIMARY_COLUMNS: tuple[str, ...] = ("room_type", "neighbourhood_cleansed")
+
+# How many inputs to show before the "More details" section.
+PRIMARY_FIELD_COUNT = 8
+
 # The four input variable categories of the conceptual framework, in the
 # order they are presented on the form.
 CATEGORY_LISTS: tuple[tuple[str, list[str]], ...] = (
@@ -126,6 +168,8 @@ class FieldSpec:
     minimum: float | None = None
     maximum: float | None = None
     step: str = "any"
+    help_text: str = ""
+    is_primary: bool = True
 
     @property
     def range_hint(self) -> str:
@@ -154,12 +198,71 @@ def _trim(value: float | None) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:g}"
 
 
-def field_specs(model: LoadedModel) -> list[FieldSpec]:
+def primary_input_columns(
+    model: LoadedModel,
+    ranking: list[str] | None = None,
+    count: int = PRIMARY_FIELD_COUNT,
+) -> list[str]:
+    """
+    Choose the columns to show above the "More details" section.
+
+    ``ranking`` is the importance order from
+    :func:`src.models.report.raw_feature_ranking`. Selection order:
+
+    1. :data:`REQUIRED_PRIMARY_COLUMNS`, always.
+    2. The highest-ranked column of each of the four input categories, so
+       every heading on the form has at least one field under it. A category
+       with nothing visible would imply the model ignores it, which is not
+       what an empty section means.
+    3. The rest of the ranking, until ``count`` is reached.
+
+    With no ranking available, the first ``count`` input columns are used, so
+    the form still works on a checkout with no reports.
+    """
+    wanted = model.input_columns
+    ranking = [column for column in (ranking or []) if column in wanted]
+
+    chosen: list[str] = [c for c in REQUIRED_PRIMARY_COLUMNS if c in wanted]
+
+    category_of = {
+        column: category for category, columns in CATEGORY_LISTS for column in columns
+    }
+    represented = {category_of.get(column) for column in chosen}
+    for category, _ in CATEGORY_LISTS:
+        if category in represented:
+            continue
+        best = next(
+            (c for c in ranking if category_of.get(c) == category),
+            next((c for c in wanted if category_of.get(c) == category), None),
+        )
+        if best is not None:
+            chosen.append(best)
+            represented.add(category)
+
+    for column in ranking or wanted:
+        if len(chosen) >= count:
+            break
+        if column not in chosen:
+            chosen.append(column)
+
+    return chosen
+
+
+def field_specs(
+    model: LoadedModel, primary_columns: list[str] | None = None
+) -> list[FieldSpec]:
     """
     Describe every input control, grouped by input variable category.
 
     Only columns the pipeline actually asks for are included, so a derived
     feature such as ``has_no_reviews`` never appears on the form.
+
+    Args:
+        model: The loaded model, which supplies the columns, categories and
+            ranges.
+        primary_columns: Columns to mark as primary. Every column is primary
+            when this is None, which is the behaviour a caller that does not
+            split the form wants.
     """
     wanted = model.input_columns
     choices = model.categorical_choices
@@ -171,42 +274,73 @@ def field_specs(model: LoadedModel) -> list[FieldSpec]:
             if column not in wanted:
                 continue
             label = FIELD_LABELS.get(column, column.replace("_", " ").capitalize())
+            is_primary = primary_columns is None or column in primary_columns
+            shared = {
+                "name": column,
+                "label": label,
+                "category": category,
+                "help_text": FIELD_HELP.get(column, ""),
+                "is_primary": is_primary,
+            }
             if column in choices:
                 specs.append(
                     FieldSpec(
-                        name=column,
-                        label=label,
-                        category=category,
                         kind="choice",
                         required=True,
                         choices=tuple(choices[column]),
+                        **shared,
                     )
                 )
                 continue
             bounds = ranges.get(column, {})
             specs.append(
                 FieldSpec(
-                    name=column,
-                    label=label,
-                    category=category,
                     kind="number",
                     required=column not in OPTIONAL_REVIEW_COLUMNS,
                     minimum=bounds.get("min"),
                     maximum=bounds.get("max"),
                     step="1" if column in INTEGER_COLUMNS else "any",
+                    **shared,
                 )
             )
     return specs
 
 
-def grouped_field_specs(model: LoadedModel) -> list[tuple[str, list[FieldSpec]]]:
-    """Field specs as ``[(category, [spec, ...]), ...]`` for the template."""
-    specs = field_specs(model)
+def _group(specs: list[FieldSpec]) -> list[tuple[str, list[FieldSpec]]]:
+    """Specs as ``[(category, [spec, ...]), ...]``, skipping empty categories."""
     return [
         (category, [spec for spec in specs if spec.category == category])
         for category, _ in CATEGORY_LISTS
         if any(spec.category == category for spec in specs)
     ]
+
+
+def grouped_field_specs(
+    model: LoadedModel, primary_columns: list[str] | None = None
+) -> list[tuple[str, list[FieldSpec]]]:
+    """Every field spec as ``[(category, [spec, ...]), ...]``."""
+    return _group(field_specs(model, primary_columns))
+
+
+def form_sections(
+    model: LoadedModel, ranking: list[str] | None = None
+) -> dict[str, list[tuple[str, list[FieldSpec]]]]:
+    """
+    The form split into the fields shown up front and the rest.
+
+    Both halves keep the four category headings, so collapsing the remainder
+    does not change what anything is called. Every column appears in exactly
+    one half, so the rendered form still submits the complete input.
+
+    Returns:
+        ``{"primary": [(category, specs)], "more": [(category, specs)]}``
+    """
+    primary = primary_input_columns(model, ranking)
+    specs = field_specs(model, primary)
+    return {
+        "primary": _group([spec for spec in specs if spec.is_primary]),
+        "more": _group([spec for spec in specs if not spec.is_primary]),
+    }
 
 
 def build_request_model(model: LoadedModel) -> type[BaseModel]:
@@ -300,33 +434,100 @@ class DecisionRequest(BaseModel):
 
     recommendation_id: int = Field(ge=1, description="Recommendation")
     decision: Literal["accept", "modify", "reject"] = Field(description="Decision")
-    final_price: float | None = Field(default=None, gt=0, description="New price")
+    # validate_default, because a form that omits the price box entirely
+    # leaves this at its default, and Pydantic skips validators for a field
+    # that was never supplied. Without it, "modify" with no price would pass
+    # validation and only be caught by the database CHECK constraint, which
+    # is a 500 rather than a message beside the field.
+    final_price: float | None = Field(
+        default=None, gt=0, validate_default=True, description="New price"
+    )
 
-    @model_validator(mode="after")
-    def check_price_matches_action(self) -> DecisionRequest:
-        if self.decision == "modify" and self.final_price is None:
+    @field_validator("final_price")
+    @classmethod
+    def price_must_match_action(
+        cls, value: float | None, info: ValidationInfo
+    ) -> float | None:
+        """
+        A field validator rather than a model validator, so the error is
+        reported against ``final_price`` and the page can show it beside the
+        price box. A model-level error carries no field and could only be
+        shown in the summary.
+
+        ``decision`` is declared first, so it is already validated and present
+        in ``info.data`` by the time this runs. It is absent only when
+        ``decision`` itself failed, and there is nothing to check against then.
+        """
+        decision = info.data.get("decision")
+        if decision == "modify" and value is None:
             raise ValueError(
                 "Choosing Modify needs a new price greater than 0 in the price box."
             )
-        if self.decision == "reject":
+        if decision == "reject":
             # Whatever is left in the price box is not part of a rejection.
-            object.__setattr__(self, "final_price", None)
-        return self
+            return None
+        return value
+
+
+# Overrides for the "Load example listing" button: one concrete inner-Sydney
+# listing rather than a column-by-column average. The medians below describe a
+# listing nobody owns, which is fine as a starting point and poor as a
+# demonstration, so the example is internally consistent instead: a two-bedroom
+# apartment in the City of Sydney, well reviewed and often booked.
+EXAMPLE_LISTING: dict[str, Any] = {
+    "room_type": "Entire home/apt",
+    "accommodates": 4,
+    "bedrooms": 2,
+    "beds": 2,
+    "bathrooms": 1,
+    "neighbourhood_cleansed": "Sydney",
+    "latitude": -33.8688,
+    "longitude": 151.2093,
+    "hosts_time_as_host_years": 6,
+    "hosts_time_as_host_months": 4,
+    "host_listings_count": 2,
+    "host_is_superhost": "t",
+    "host_identity_verified": "t",
+    "host_has_profile_pic": "t",
+    "review_scores_rating": 4.85,
+    "review_scores_accuracy": 4.86,
+    "review_scores_communication": 4.9,
+    "review_scores_value": 4.7,
+    "number_of_reviews": 84,
+    "number_of_reviews_ltm": 24,
+    "number_of_reviews_l30d": 2,
+    "reviews_per_month": 1.8,
+    "availability_30": 11,
+    "availability_90": 38,
+    "availability_365": 190,
+}
 
 
 def example_values(model: LoadedModel) -> dict[str, Any]:
     """
-    A plausible pre-filled form, so the page is usable without 25 guesses.
+    The pre-filled form: the training median or mode of every column.
 
-    Numeric fields take the midpoint of the training range, rounded for the
-    integer columns; categorical fields take the last category, which is the
-    affirmative one for the ``f``/``t`` flags. This is a convenience default,
-    not a representative listing.
+    Filling the form from the training centre means it always holds a
+    submittable listing, so a demo never opens on 20 empty boxes and no value
+    can be out of the range validation accepts.
+
+    Medians and modes come from the metadata the training run wrote, computed
+    on the training split only. When they are absent, because the metadata
+    predates them, numeric fields fall back to the midpoint of the range and
+    categorical fields to the first category, which is still inside the
+    accepted range.
     """
+    medians = model.numeric_medians
+    modes = model.categorical_modes
+
     values: dict[str, Any] = {}
     for spec in field_specs(model):
         if spec.kind == "choice":
-            values[spec.name] = spec.choices[-1] if spec.choices else ""
+            fallback = spec.choices[0] if spec.choices else ""
+            values[spec.name] = modes.get(spec.name, fallback)
+        elif spec.name in medians:
+            median = medians[spec.name]
+            values[spec.name] = int(round(median)) if spec.step == "1" else median
         elif spec.minimum is None or spec.maximum is None:
             values[spec.name] = ""
         else:
@@ -334,4 +535,35 @@ def example_values(model: LoadedModel) -> dict[str, Any]:
             values[spec.name] = (
                 int(round(midpoint)) if spec.step == "1" else round(midpoint, 4)
             )
+    return values
+
+
+def example_listing_values(model: LoadedModel) -> dict[str, Any]:
+    """
+    The "Load example listing" values, clamped to what validation accepts.
+
+    Built from :data:`EXAMPLE_LISTING` over the median defaults, so a column
+    the example does not mention still gets a usable value. Each number is
+    clamped to its training range and each category checked against the
+    training categories, because the example is written by hand and the ranges
+    come from whichever snapshot was trained on.
+    """
+    values = example_values(model)
+    specs = {spec.name: spec for spec in field_specs(model)}
+
+    for column, value in EXAMPLE_LISTING.items():
+        spec = specs.get(column)
+        if spec is None:
+            continue
+        if spec.kind == "choice":
+            if value in spec.choices:
+                values[column] = value
+            continue
+        number = float(value)
+        if spec.minimum is not None:
+            number = max(number, spec.minimum)
+        if spec.maximum is not None:
+            number = min(number, spec.maximum)
+        values[column] = int(round(number)) if spec.step == "1" else number
+
     return values

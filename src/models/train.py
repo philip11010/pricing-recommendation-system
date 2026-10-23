@@ -55,8 +55,8 @@ from xgboost import XGBRegressor
 from src.config import (
     CV_FOLDS,
     MODEL_STORE_DIR,
-    PROJECT_ROOT,
     RANDOM_SEED,
+    REPORTS_DIR,
     TARGET_LEAKAGE_COLUMNS,
     TEST_SIZE,
     full_feature_set,
@@ -68,7 +68,6 @@ from src.preprocessing.target import split_features_and_target
 RAW_FILENAME = "listings.csv.gz"
 DATA_SOURCE = "Inside Airbnb Sydney (proxy)"
 TARGET_DESCRIPTION = "log(price)"
-REPORTS_DIR = PROJECT_ROOT / "reports"
 TOP_IMPORTANCES = 15
 BEST_MODEL_FILENAME = "best_model.joblib"
 BEST_METADATA_FILENAME = "best_model_metadata.json"
@@ -319,9 +318,16 @@ def training_input_schema(
     ``input_columns`` omits features the pipeline derives for itself, so the
     caller is never asked for a value it cannot know.
 
+    The medians and modes are the training-set central values. The serving
+    layer pre-fills its form with them, so the form always holds a submittable
+    listing and a demo never opens on 20 empty boxes. They are statistics of
+    the training split only, which is the same discipline the pipeline's own
+    imputers follow.
+
     Returns:
         ``{"input_columns": [...], "categorical_choices": {...},
-        "numeric_ranges": {...}}``
+        "numeric_ranges": {...}, "numeric_medians": {...},
+        "categorical_modes": {...}}``
     """
     input_columns = [f for f in features if f not in DERIVED_FEATURES]
 
@@ -335,6 +341,7 @@ def training_input_schema(
             categorical_choices[column] = [str(level) for level in levels]
 
     numeric_ranges = {}
+    numeric_medians = {}
     for column in input_columns:
         if column in categorical_choices:
             continue
@@ -344,11 +351,20 @@ def training_input_schema(
                 "min": float(values.min()),
                 "max": float(values.max()),
             }
+            numeric_medians[column] = float(values.median())
+
+    categorical_modes = {}
+    for column in categorical_choices:
+        counts = X_train[column].value_counts(dropna=True)
+        if not counts.empty:
+            categorical_modes[column] = str(counts.index[0])
 
     return {
         "input_columns": input_columns,
         "categorical_choices": categorical_choices,
         "numeric_ranges": numeric_ranges,
+        "numeric_medians": numeric_medians,
+        "categorical_modes": categorical_modes,
     }
 
 
@@ -521,6 +537,8 @@ def _save_best(
         "input_columns": input_schema.get("input_columns", []),
         "categorical_choices": input_schema.get("categorical_choices", {}),
         "numeric_ranges": input_schema.get("numeric_ranges", {}),
+        "numeric_medians": input_schema.get("numeric_medians", {}),
+        "categorical_modes": input_schema.get("categorical_modes", {}),
         "all_models": {row["model"]: row["metrics"] for row in results},
     }
     (model_dir / BEST_METADATA_FILENAME).write_text(

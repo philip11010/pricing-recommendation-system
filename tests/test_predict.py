@@ -94,6 +94,12 @@ def fake_store(tmp_path):
                     "number_of_reviews": {"min": 0.0, "max": 50.0},
                     "review_scores_rating": {"min": 4.2, "max": 4.9},
                 },
+                "numeric_medians": {
+                    "accommodates": 4.0,
+                    "number_of_reviews": 20.0,
+                    "review_scores_rating": 4.8,
+                },
+                "categorical_modes": {"room_type": "Entire home/apt"},
             }
         ),
         encoding="utf-8",
