@@ -97,6 +97,45 @@ class LoadedModel:
         metrics = self.metadata.get("metrics", {})
         return {str(k): float(v) for k, v in metrics.items()}
 
+    @property
+    def typical_error_dollars(self) -> float | None:
+        """
+        Test-set MAE, the figure to quote as the error on one prediction.
+
+        MAE is the mean of the absolute errors, so "about this much out" is a
+        fair reading of it. RMSE squares the errors first, which on this data
+        makes it roughly four times larger: a handful of listings up to
+        $52,850 dominate it, and a log-scale model never predicts those. RMSE
+        is the right criterion for ranking models against each other, and the
+        wrong number to hand a user as the expected miss on their own price.
+        """
+        mae = self.metrics.get("mae_dollars")
+        return float(mae) if mae is not None else None
+
+    @property
+    def model_comparison(self) -> list[dict[str, Any]]:
+        """
+        Every candidate model with its test metrics, best first.
+
+        Read from the ``all_models`` block the training run recorded, so the
+        comparison shown is the one that selected this model. Ordered by the
+        selection metric, which is dollar RMSE.
+        """
+        all_models = self.metadata.get("all_models", {})
+        selection_metric = str(self.metadata.get("selection_metric", "rmse_dollars"))
+
+        rows = [
+            {
+                "model_name": str(name),
+                "rmse_dollars": float(metrics.get("rmse_dollars", float("nan"))),
+                "mae_dollars": float(metrics.get("mae_dollars", float("nan"))),
+                "r2_dollars": float(metrics.get("r2_dollars", float("nan"))),
+                "is_selected": str(name) == self.model_name,
+            }
+            for name, metrics in all_models.items()
+        ]
+        return sorted(rows, key=lambda row: row.get(selection_metric, float("inf")))
+
 
 def load_best_model(model_dir: Path = MODEL_STORE_DIR) -> LoadedModel:
     """

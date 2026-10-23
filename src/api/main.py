@@ -131,9 +131,9 @@ def get_request_model(
 #
 # Stands in for a real mentor record. The platform dataset has not been
 # received, so the profile, performance and demand panels still show fixed
-# values, and the price shown before any prediction is an illustration. The
-# template labels it as such; everything the model produces is in USD and
-# marked as model output.
+# values. There is deliberately no placeholder price: the only figure the
+# dashboard shows is model output, in USD. Before a prediction exists the
+# panel shows an empty state instead.
 # ---------------------------------------------------------------------------
 PLACEHOLDER_DASHBOARD: dict = {
     "profile": {
@@ -148,11 +148,6 @@ PLACEHOLDER_DASHBOARD: dict = {
         "reviews": 38,
         "completion_rate": 0.96,
         "repeat_booking_rate": 0.41,
-    },
-    "recommendation": {
-        "currency": "KES",
-        "price": 2500,
-        "current_price": 2200,
     },
     "demand": {
         "profile_views_30d": 312,
@@ -174,6 +169,7 @@ def page_context(
         "trained_at": model.trained_at if model else None,
         "field_groups": grouped_field_specs(model) if model else [],
         "values": example_values(model) if model else {},
+        "model_comparison": model.model_comparison if model else [],
         "errors": [],
         "prediction": None,
         "confirmation": None,
@@ -277,6 +273,8 @@ async def recommend(
                 "price": price,
                 "model_name": model.model_name,
                 "data_source": model.data_source,
+                # MAE, not RMSE: see LoadedModel.typical_error_dollars.
+                "typical_error": model.typical_error_dollars,
             },
         ),
     )

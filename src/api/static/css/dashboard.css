@@ -206,6 +206,7 @@ body {
     grid-template-areas:
       "profile     recommendation"
       "performance form"
+      "comparison  form"
       "demand      form";
     align-items: start;
   }
@@ -217,6 +218,7 @@ body {
 
   .recommendation { grid-area: recommendation; }
   .form-panel     { grid-area: form; }
+  .comparison     { grid-area: comparison; }
   .demand         { grid-area: demand; }
   .profile        { grid-area: profile; }
   .performance    { grid-area: performance; }
@@ -364,11 +366,6 @@ body {
   max-width: 220px;
 }
 
-/* An illustrative figure must not read as confidently as model output. */
-.price.is-placeholder {
-  color: var(--muted);
-}
-
 .errors {
   margin: 0 0 var(--gap);
   padding: 10px 12px;
@@ -417,4 +414,69 @@ body {
 
 .confirmation-line {
   font-size: 1.1rem;
+}
+
+/* --------------------------------------------- result panel and comparison */
+
+/*
+ * The error figure sits directly under the price, because a price without its
+ * uncertainty invites more confidence than the model earns.
+ */
+.price-error {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.empty-state {
+  margin: 0 0 var(--gap);
+  padding: 14px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.comparison-table th {
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.comparison-table tr.is-selected {
+  font-weight: 600;
+}
+
+.badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* The accepted range, shown permanently rather than as a placeholder that
+ * vanishes once the user starts typing. */
+.field-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.75rem;
 }

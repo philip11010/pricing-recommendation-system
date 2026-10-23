@@ -7,6 +7,7 @@ need the real artefact are marked and skipped when it is absent.
 """
 
 import json
+import pathlib
 
 import joblib
 import numpy as np
@@ -28,6 +29,28 @@ from src.models.predict import (
 )
 
 FEATURES = ["accommodates", "number_of_reviews", "review_scores_rating", "room_type"]
+
+# Deliberately far apart, so a test can tell which figure a caller used.
+METRICS = {
+    "Linear Regression (Ridge)": {
+        "rmse_dollars": 517.0,
+        "mae_dollars": 42.0,
+        "r2_dollars": 0.5,
+        "rmse_log": 0.54,
+    },
+    "Random Forest": {
+        "rmse_dollars": 550.0,
+        "mae_dollars": 136.0,
+        "r2_dollars": 0.42,
+        "rmse_log": 0.42,
+    },
+    "XGBoost": {
+        "rmse_dollars": 512.0,
+        "mae_dollars": 131.0,
+        "r2_dollars": 0.49,
+        "rmse_log": 0.40,
+    },
+}
 
 
 @pytest.fixture
@@ -59,7 +82,9 @@ def fake_store(tmp_path):
                 "data_source": "Inside Airbnb Sydney (proxy)",
                 "target": "log(price)",
                 "trained_at": "2026-01-01T00:00:00",
-                "metrics": {"rmse_dollars": 100.0},
+                "selection_metric": "rmse_dollars",
+                "metrics": METRICS["Linear Regression (Ridge)"],
+                "all_models": METRICS,
                 "input_columns": FEATURES,
                 "categorical_choices": {
                     "room_type": ["Entire home/apt", "Private room"]
@@ -80,6 +105,12 @@ def fake_store(tmp_path):
 def model(fake_store) -> LoadedModel:
     return load_best_model(fake_store)
 
+
+# Skips the tests that need a trained artefact, which is gitignored.
+real_artefact = pytest.mark.skipif(
+    not (MODEL_STORE_DIR / BEST_MODEL_FILENAME).exists(),
+    reason="no trained model; run python -m src.models.train",
+)
 
 VALID = {
     "accommodates": 4.0,
@@ -153,6 +184,118 @@ def test_try_load_returns_none_instead_of_raising(tmp_path):
 
 def test_try_load_returns_the_model_when_present(fake_store):
     assert try_load_best_model(fake_store) is not None
+
+
+# ---------------------------------------------------------------------------
+# Which artefacts get loaded
+#
+# Serving needs the selected pipeline only. random_forest.joblib is 192 MB on
+# the real data, so loading the per-model artefacts would cost a couple of
+# hundred megabytes of resident memory for nothing.
+# ---------------------------------------------------------------------------
+def test_only_the_best_model_artefact_is_read(fake_store, monkeypatch):
+    for name in ("ridge.joblib", "random_forest.joblib", "xgboost.joblib"):
+        (fake_store / name).write_bytes(b"per-model artefact, must not be read")
+    read: list[str] = []
+    real_load = joblib.load
+    monkeypatch.setattr(
+        joblib,
+        "load",
+        lambda path, *a, **k: (read.append(str(path)), real_load(path))[1],
+    )
+
+    load_best_model(fake_store)
+
+    assert [pathlib.Path(path).name for path in read] == [BEST_MODEL_FILENAME]
+
+
+@real_artefact
+def test_application_startup_reads_only_the_best_model(monkeypatch, tmp_path):
+    """
+    The same guarantee at the level that matters: one full application
+    startup, against the real models_store, must touch one artefact.
+    """
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'probe.db'}")
+    read: list[str] = []
+    real_load = joblib.load
+    monkeypatch.setattr(
+        joblib,
+        "load",
+        lambda path, *a, **k: (read.append(str(path)), real_load(path))[1],
+    )
+
+    from src.api.main import app
+    from src.db import reset_engine
+
+    reset_engine()
+    try:
+        with TestClient(app) as client:
+            client.get("/health")
+    finally:
+        reset_engine()
+
+    assert [pathlib.Path(path).name for path in read] == [BEST_MODEL_FILENAME]
+
+
+# ---------------------------------------------------------------------------
+# Reported metrics
+# ---------------------------------------------------------------------------
+def test_typical_error_is_the_mae_not_the_rmse(model):
+    """
+    The figure quoted beside a single price must be MAE. RMSE squares the
+    errors, so on this data it is several times larger and would overstate
+    the error on a typical listing.
+    """
+    assert model.typical_error_dollars == pytest.approx(42.0)
+    assert model.typical_error_dollars != pytest.approx(model.metrics["rmse_dollars"])
+
+
+def test_typical_error_is_none_when_no_mae_was_recorded(model):
+    metadata = {**model.metadata, "metrics": {"rmse_dollars": 517.0}}
+
+    stripped = LoadedModel(pipeline=model.pipeline, metadata=metadata)
+
+    assert stripped.typical_error_dollars is None
+
+
+def test_model_comparison_lists_every_candidate(model):
+    names = [row["model_name"] for row in model.model_comparison]
+
+    assert sorted(names) == sorted(METRICS)
+
+
+def test_model_comparison_is_ordered_by_the_selection_metric(model):
+    rmse = [row["rmse_dollars"] for row in model.model_comparison]
+
+    assert rmse == sorted(rmse)
+
+
+def test_model_comparison_carries_rmse_mae_and_r2(model):
+    row = model.model_comparison[0]
+
+    assert set(row) == {
+        "model_name",
+        "rmse_dollars",
+        "mae_dollars",
+        "r2_dollars",
+        "is_selected",
+    }
+
+
+def test_model_comparison_marks_the_loaded_model(model):
+    selected = [row for row in model.model_comparison if row["is_selected"]]
+
+    assert [row["model_name"] for row in selected] == ["Linear Regression (Ridge)"]
+
+
+def test_model_comparison_is_empty_without_an_all_models_block(model):
+    metadata = {k: v for k, v in model.metadata.items() if k != "all_models"}
+
+    stripped = LoadedModel(pipeline=model.pipeline, metadata=metadata)
+
+    assert stripped.model_comparison == []
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +403,6 @@ def test_predict_rejects_a_non_finite_model_output(model):
 # ---------------------------------------------------------------------------
 # The real artefact, when one has been trained
 # ---------------------------------------------------------------------------
-real_artefact = pytest.mark.skipif(
-    not (MODEL_STORE_DIR / BEST_MODEL_FILENAME).exists(),
-    reason="no trained model; run python -m src.models.train",
-)
 
 
 @real_artefact

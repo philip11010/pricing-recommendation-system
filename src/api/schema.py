@@ -128,10 +128,23 @@ class FieldSpec:
     step: str = "any"
 
     @property
-    def placeholder(self) -> str:
-        if self.kind != "number" or self.minimum is None:
+    def range_hint(self) -> str:
+        """
+        The accepted range, as "1 to 16", or "" when there is no bound.
+
+        Shown beside the control rather than only as a placeholder, because a
+        placeholder disappears as soon as the field has a value, which is
+        exactly when the user is choosing a number and needs to know the
+        limit. Input outside the range is refused, so the limit has to be
+        visible before submitting rather than explained afterwards.
+        """
+        if self.kind != "number" or self.minimum is None or self.maximum is None:
             return ""
         return f"{_trim(self.minimum)} to {_trim(self.maximum)}"
+
+    @property
+    def placeholder(self) -> str:
+        return self.range_hint
 
 
 def _trim(value: float | None) -> str:

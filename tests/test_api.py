@@ -55,8 +55,14 @@ def test_action_controls_are_styled_identically(action_buttons):
     assert all("autofocus" not in b for b in action_buttons)
 
 
-def test_dashboard_renders_placeholder_price(dashboard_response):
-    assert "2,500" in dashboard_response.text
+def test_dashboard_shows_an_empty_state_before_any_recommendation(dashboard_response):
+    """
+    Nothing on the landing page may look like a price. The dashboard used to
+    show a greyed-out illustrative figure here, which is the one thing a
+    pricing tool must not do.
+    """
+    assert "No price yet" in dashboard_response.text
+    assert "price-value" not in dashboard_response.text
 
 
 def test_stylesheet_is_served(client, dashboard_response):

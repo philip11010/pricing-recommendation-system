@@ -28,6 +28,26 @@ from src.models.predict import (
 
 FEATURES = ["accommodates", "number_of_reviews", "review_scores_rating", "room_type"]
 
+# RMSE and MAE are far apart on purpose, so a test can tell which figure the
+# result panel quoted.
+METRICS = {
+    "Linear Regression (Ridge)": {
+        "rmse_dollars": 517.0,
+        "mae_dollars": 42.0,
+        "r2_dollars": 0.5,
+    },
+    "Random Forest": {
+        "rmse_dollars": 550.0,
+        "mae_dollars": 136.0,
+        "r2_dollars": 0.42,
+    },
+    "XGBoost": {
+        "rmse_dollars": 512.0,
+        "mae_dollars": 131.0,
+        "r2_dollars": 0.49,
+    },
+}
+
 VALID_FORM = {
     "accommodates": "4",
     "number_of_reviews": "20",
@@ -63,6 +83,9 @@ def fake_model(tmp_path):
                 "data_source": "Inside Airbnb Sydney (proxy)",
                 "target": "log(price)",
                 "trained_at": "2026-01-01T00:00:00",
+                "selection_metric": "rmse_dollars",
+                "metrics": METRICS["Linear Regression (Ridge)"],
+                "all_models": METRICS,
                 "input_columns": FEATURES,
                 "categorical_choices": {
                     "room_type": ["Entire home/apt", "Private room"]
@@ -115,6 +138,23 @@ def session():
     """A session on the same temporary database the client is using."""
     with sessionmaker(bind=get_engine(), expire_on_commit=False)() as session:
         yield session
+
+
+def result_panel(response) -> str:
+    """The recommendation panel only, so a test can say where a figure is."""
+    match = re.search(
+        r'<section class="panel recommendation".*?</section>', response.text, re.S
+    )
+    assert match, "no recommendation panel in the rendered page"
+    return match.group(0)
+
+
+def comparison_panel(response) -> str:
+    match = re.search(
+        r'<section class="panel comparison".*?</section>', response.text, re.S
+    )
+    assert match, "no comparison panel in the rendered page"
+    return match.group(0)
 
 
 def recommendation_id(response) -> str:
@@ -251,6 +291,127 @@ def test_recommend_accepts_a_listing_with_no_reviews(client, session):
 
 
 # ---------------------------------------------------------------------------
+# Reported error and model comparison
+# ---------------------------------------------------------------------------
+def test_result_panel_quotes_the_mae_as_the_typical_error(client):
+    response = client.post("/recommend", data=VALID_FORM)
+
+    panel = result_panel(response)
+
+    assert "Typical error about" in panel
+    assert "$42" in panel
+
+
+def test_result_panel_does_not_quote_the_rmse(client):
+    """
+    RMSE is roughly four times MAE on this data, so showing it beside one
+    price would overstate the error on a typical listing.
+    """
+    response = client.post("/recommend", data=VALID_FORM)
+
+    panel = result_panel(response)
+
+    assert "517" not in panel
+    assert "RMSE" not in panel
+
+
+def test_comparison_card_shows_rmse_mae_and_r2(client):
+    panel = comparison_panel(client.get("/"))
+
+    assert "RMSE (USD)" in panel
+    assert "MAE (USD)" in panel
+    assert "R2" in panel
+
+
+def test_comparison_card_lists_all_three_candidate_models(client):
+    panel = comparison_panel(client.get("/"))
+
+    for name in METRICS:
+        assert name in panel
+
+
+def test_comparison_card_reports_the_rmse_figures(client):
+    panel = comparison_panel(client.get("/"))
+
+    assert "517.00" in panel
+    assert "550.00" in panel
+    assert "512.00" in panel
+
+
+def test_comparison_card_orders_by_rmse_and_marks_the_selected_model(client):
+    panel = comparison_panel(client.get("/"))
+
+    order = [
+        panel.index(name) for name in ("XGBoost", "Linear Regression", "Random Forest")
+    ]
+    assert order == sorted(order)
+    assert "selected" in panel
+
+
+def test_comparison_card_is_absent_without_a_model(modelless_client):
+    assert 'class="panel comparison"' not in modelless_client.get("/").text
+
+
+# ---------------------------------------------------------------------------
+# Empty state
+# ---------------------------------------------------------------------------
+def test_landing_page_shows_an_empty_state_instead_of_a_price(client):
+    response = client.get("/")
+
+    assert "No price yet" in response.text
+    assert "price-value" not in response.text
+
+
+def test_landing_page_has_no_placeholder_currency_or_figure(client):
+    """
+    The dashboard used to show an illustrative "KES 2,500". A figure that
+    looks like a price but is not model output is the one thing a pricing
+    tool must not display.
+    """
+    text = client.get("/").text
+
+    assert "KES" not in text
+    assert "2,500" not in text
+    assert "Illustration only" not in text
+
+
+def test_empty_state_is_replaced_by_the_real_price(client):
+    response = client.post("/recommend", data=VALID_FORM)
+
+    assert "No price yet" not in response.text
+    assert "price-value" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Range hints
+# ---------------------------------------------------------------------------
+def test_each_numeric_input_shows_its_training_range(client):
+    text = client.get("/").text
+
+    assert '<span class="field-hint" id="hint-accommodates">1 to 8</span>' in text
+    assert '<span class="field-hint" id="hint-number_of_reviews">0 to 50</span>' in text
+
+
+def test_range_hint_is_tied_to_its_input_for_screen_readers(client):
+    text = client.get("/").text
+
+    assert 'aria-describedby="hint-accommodates"' in text
+
+
+def test_range_hint_shows_decimal_bounds_unrounded(client):
+    """review_scores_rating runs 4.2 to 4.9, so the hint must not say 4 to 5."""
+    text = client.get("/").text
+
+    assert 'id="hint-review_scores_rating">4.2 to 4.9</span>' in text
+
+
+def test_no_range_hint_on_a_dropdown(client):
+    assert 'id="hint-room_type"' not in client.get("/").text
+
+
+# ---------------------------------------------------------------------------
+# POST /recommend, invalid input
+# ---------------------------------------------------------------------------# ---------------------------------------------------------------------------
 # POST /recommend, invalid input
 # ---------------------------------------------------------------------------
 def test_missing_required_field_is_rejected(client, session):
