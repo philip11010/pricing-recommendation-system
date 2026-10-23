@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}History &middot; Mentor Pricing{% endblock %}
+
+{% block content %}
+<div class="dashboard single-column">
+  <section class="panel" aria-labelledby="history-heading">
+    <h2 id="history-heading" class="panel-heading">
+      Recent recommendations
+    </h2>
+    <p class="panel-note">
+      The last {{ limit }} recommendations, newest first, with the decision
+      recorded against each.
+    </p>
+
+    {% if records %}
+    <table class="history-table">
+      <thead>
+        <tr>
+          <th scope="col">#</th>
+          <th scope="col">Created (UTC)</th>
+          <th scope="col">Model</th>
+          <th scope="col">Recommended (USD)</th>
+          <th scope="col">Decision</th>
+          <th scope="col">Final price (USD)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for record in records %}
+        <tr>
+          <td>{{ record.id }}</td>
+          <td>{{ record.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+          <td>{{ record.model_name }}</td>
+          <td>{{ "{:,.2f}".format(record.predicted_price) }}</td>
+          <td>
+            {% if record.decisions %}
+              {# Most recent decision last, per the relationship ordering. #}
+              {{ record.decisions[-1].action }}
+            {% else %}
+              <span class="muted">no decision yet</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if record.decisions and record.decisions[-1].final_price is not none %}
+              {{ "{:,.2f}".format(record.decisions[-1].final_price) }}
+            {% else %}
+              <span class="muted">&mdash;</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="panel-note">
+      No recommendations recorded yet. Submit the form on the dashboard.
+    </p>
+    {% endif %}
+
+    <p><a href="{{ url_for('dashboard') }}">Back to the dashboard</a></p>
+  </section>
+</div>
+{% endblock %}

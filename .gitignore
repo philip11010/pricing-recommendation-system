@@ -14,12 +14,19 @@ models_store/*
 reports/*
 !reports/.gitkeep
 
+# Local database - never commit application data
+app.db
+*.db
+*.sqlite
+*.sqlite3
+
 # Environment
 .venv/
 venv/
 env/
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/

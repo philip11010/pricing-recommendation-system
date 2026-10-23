@@ -16,6 +16,7 @@ python-multipart==0.0.20
 # Database
 psycopg2-binary==2.9.10
 SQLAlchemy==2.0.36
+python-dotenv==1.2.3
 
 # Model persistence
 joblib==1.4.2

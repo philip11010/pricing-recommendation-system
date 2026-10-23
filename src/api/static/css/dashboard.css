@@ -205,14 +205,27 @@ body {
     grid-template-columns: minmax(240px, 1fr) 2fr;
     grid-template-areas:
       "profile     recommendation"
-      "performance demand";
+      "performance form"
+      "demand      form";
     align-items: start;
   }
 
+  .dashboard.single-column {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
   .recommendation { grid-area: recommendation; }
+  .form-panel     { grid-area: form; }
   .demand         { grid-area: demand; }
   .profile        { grid-area: profile; }
   .performance    { grid-area: performance; }
+
+  .field-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--gap);
+  }
 
   .panel {
     padding: 18px 20px;
@@ -240,4 +253,168 @@ body {
     display: block;
     margin-top: 0;
   }
+}
+
+/* ------------------------------------------------- proxy banner and notices */
+
+/*
+ * The banner is standing context on every page, so it is styled as a quiet
+ * band rather than an alert: an attention-grabbing colour on every page
+ * trains the reader to ignore it, which is the opposite of the intent.
+ */
+.proxy-banner {
+  margin: 0;
+  padding: 10px 16px;
+  background: #fff8e1;
+  border-bottom: 1px solid #e8d9a0;
+  color: #4a3c0d;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.model-warning {
+  margin: 0;
+  padding: 10px 16px;
+  background: #fdecea;
+  border-bottom: 1px solid #f3b7b1;
+  color: #6b1f17;
+  font-size: 0.85rem;
+}
+
+.site-nav {
+  float: right;
+  font-size: 0.9rem;
+}
+
+.site-nav a {
+  margin-left: 12px;
+  color: var(--focus);
+}
+
+/* ------------------------------------------------------------- input form */
+
+.form-help,
+.panel-note {
+  margin: 0 0 var(--gap);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.field-group {
+  margin: 0 0 var(--gap);
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.field-group legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 0.85rem;
+}
+
+.field .optional {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.field input:focus-visible,
+.field select:focus-visible,
+.submit-btn:focus-visible,
+.action-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.submit-btn {
+  padding: 9px 16px;
+  border: 1px solid var(--focus);
+  border-radius: var(--radius);
+  background: var(--focus);
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.modify-price {
+  max-width: 220px;
+}
+
+/* An illustrative figure must not read as confidently as model output. */
+.price.is-placeholder {
+  color: var(--muted);
+}
+
+.errors {
+  margin: 0 0 var(--gap);
+  padding: 10px 12px;
+  background: #fdecea;
+  border: 1px solid #f3b7b1;
+  border-radius: var(--radius);
+  color: #6b1f17;
+  font-size: 0.9rem;
+}
+
+.errors-heading {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.errors ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* ---------------------------------------------------------------- history */
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.history-table th,
+.history-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.history-table th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.confirmation-line {
+  font-size: 1.1rem;
 }

@@ -9,7 +9,26 @@
 <body>
   <header class="site-header">
     <span class="site-title">Career Mentor &middot; Pricing</span>
+    <nav class="site-nav">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('history') }}">History</a>
+    </nav>
   </header>
+
+  {#
+    The proxy caveat appears on every page, not just the one showing a price.
+    role="note" rather than role="alert": it is standing context, so it should
+    not interrupt a screen reader mid-task on each navigation.
+  #}
+  <p class="proxy-banner" role="note">{{ banner }}</p>
+
+  {% if model_loaded is defined and not model_loaded %}
+  <p class="model-warning" role="status">
+    No trained model is loaded, so no price can be produced. Run
+    <code>python -m src.models.train</code> to create one.
+  </p>
+  {% endif %}
+
   <main class="site-main">
     {% block content %}{% endblock %}
   </main>

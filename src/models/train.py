@@ -62,7 +62,7 @@ from src.config import (
     full_feature_set,
 )
 from src.data.loader import load_raw_csv
-from src.preprocessing import NoReviewsIndicator, build_preprocessor
+from src.preprocessing import NO_REVIEWS_FLAG, NoReviewsIndicator, build_preprocessor
 from src.preprocessing.target import split_features_and_target
 
 RAW_FILENAME = "listings.csv.gz"
@@ -72,6 +72,9 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 TOP_IMPORTANCES = 15
 BEST_MODEL_FILENAME = "best_model.joblib"
 BEST_METADATA_FILENAME = "best_model_metadata.json"
+
+# Features the pipeline computes for itself, so a caller must not supply them.
+DERIVED_FEATURES: tuple[str, ...] = (NO_REVIEWS_FLAG,)
 
 # Scoring is on the log scale because that is the scale the estimators are
 # fitted on. Dollar metrics are computed afterwards, from the test set only.
@@ -303,6 +306,52 @@ def readable_params(params: dict[str, Any]) -> dict[str, Any]:
     return {key.removeprefix("model__"): value for key, value in params.items()}
 
 
+def training_input_schema(
+    search: GridSearchCV, X_train: pd.DataFrame, features: list[str]
+) -> dict[str, Any]:
+    """
+    Describe the raw input a caller must supply to use the saved pipeline.
+
+    The serving layer builds its form and its validation from this, so the
+    allowed categories and the numeric ranges a prediction is trusted over
+    come from the training data itself rather than being retyped by hand.
+
+    ``input_columns`` omits features the pipeline derives for itself, so the
+    caller is never asked for a value it cannot know.
+
+    Returns:
+        ``{"input_columns": [...], "categorical_choices": {...},
+        "numeric_ranges": {...}}``
+    """
+    input_columns = [f for f in features if f not in DERIVED_FEATURES]
+
+    categorical_choices: dict[str, list[str]] = {}
+    preprocess = search.best_estimator_.named_steps["preprocess"]
+    for name, transformer, columns in preprocess.transformers_:
+        if name != "categorical":
+            continue
+        encoder = transformer.named_steps["encode"]
+        for column, levels in zip(columns, encoder.categories_):
+            categorical_choices[column] = [str(level) for level in levels]
+
+    numeric_ranges = {}
+    for column in input_columns:
+        if column in categorical_choices:
+            continue
+        values = pd.to_numeric(X_train[column], errors="coerce")
+        if values.notna().any():
+            numeric_ranges[column] = {
+                "min": float(values.min()),
+                "max": float(values.max()),
+            }
+
+    return {
+        "input_columns": input_columns,
+        "categorical_choices": categorical_choices,
+        "numeric_ranges": numeric_ranges,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Experiment
 # ---------------------------------------------------------------------------
@@ -353,6 +402,7 @@ def run_experiment(
     # Every pipeline shares one preprocessor configuration, so the encoded
     # column names are the same for all three; record them once.
     feature_names: list[str] = []
+    input_schema: dict[str, Any] = {}
     for position, spec in enumerate(specs, start=1):
         print(
             f"[{position}/{len(specs)}] {spec.label}: "
@@ -366,6 +416,7 @@ def run_experiment(
 
         metrics = evaluate(search, X_test, y_test)
         feature_names = feature_names or preprocessed_feature_names(search)
+        input_schema = input_schema or training_input_schema(search, X_train, features)
         path = model_dir / f"{spec.key}.joblib"
         joblib.dump(search.best_estimator_, path)
 
@@ -417,7 +468,7 @@ def run_experiment(
         "limitations": LIMITATIONS,
     }
 
-    _save_best(best, results, model_dir, feature_names, timestamp)
+    _save_best(best, results, model_dir, feature_names, input_schema, timestamp)
     _write_reports(report, report_dir, timestamp)
     return report
 
@@ -445,6 +496,7 @@ def _save_best(
     results: list[dict[str, Any]],
     model_dir: Path,
     feature_names: list[str],
+    input_schema: dict[str, Any],
     timestamp: datetime,
 ) -> Path:
     """Copy the winning pipeline to ``best_model.joblib`` with metadata."""
@@ -465,6 +517,10 @@ def _save_best(
         "random_seed": RANDOM_SEED,
         "cv_folds": CV_FOLDS,
         "feature_names": feature_names,
+        # What the serving layer needs to build and validate its input form.
+        "input_columns": input_schema.get("input_columns", []),
+        "categorical_choices": input_schema.get("categorical_choices", {}),
+        "numeric_ranges": input_schema.get("numeric_ranges", {}),
         "all_models": {row["model"]: row["metrics"] for row in results},
     }
     (model_dir / BEST_METADATA_FILENAME).write_text(

@@ -12,30 +12,117 @@
 
   <section class="panel recommendation" aria-labelledby="recommendation-heading">
     <h2 id="recommendation-heading" class="panel-heading">Suggested session price</h2>
+
+    {% if prediction %}
     <p class="price">
+      <span class="price-currency">USD</span>
+      <span class="price-value">{{ "{:,.2f}".format(prediction.price) }}</span>
+    </p>
+    <p class="price-context">
+      Model output from {{ prediction.model_name }}, trained on
+      {{ prediction.data_source }}. Recommendation #{{ prediction.id }}.
+    </p>
+    {% else %}
+    {#
+      No prediction yet. The figure below is a fixed illustration of the
+      layout, not model output, and is labelled so it cannot be mistaken for
+      one. It is replaced by the real USD price once the form is submitted.
+    #}
+    <p class="price is-placeholder">
       <span class="price-currency">{{ recommendation.currency }}</span>
       <span class="price-value">{{ "{:,}".format(recommendation.price) }}</span>
     </p>
     <p class="price-context">
-      Your current listed price: {{ recommendation.currency }}
-      {{ "{:,}".format(recommendation.current_price) }}
+      Illustration only, not model output. Submit the form below for a price
+      from the trained model.
     </p>
+    {% endif %}
+
     <p class="advisory-note">
       This price is advisory. You decide whether to accept it, change it, or
       keep your own.
     </p>
 
     {# The three actions share one class and identical markup so that no
-       option is visually emphasised over the others. #}
-    <div class="actions" role="group" aria-label="Respond to the suggested price">
-      <button type="button" class="action-btn" name="decision" value="accept">Accept</button>
-      <button type="button" class="action-btn" name="decision" value="modify">Modify</button>
-      <button type="button" class="action-btn" name="decision" value="reject">Reject</button>
+       option is visually emphasised over the others. They are disabled until
+       there is a real recommendation to respond to. #}
+    <form class="decision-form" method="post" action="{{ url_for('decide') }}">
+      <input type="hidden" name="recommendation_id"
+             value="{{ prediction.id if prediction else '' }}">
+      <label class="field modify-price">
+        <span class="field-label">New price (USD), for Modify</span>
+        <input type="number" name="final_price" min="0.01" step="0.01"
+               {% if not prediction %}disabled{% endif %}>
+      </label>
+      <div class="actions" role="group" aria-label="Respond to the suggested price">
+        <button type="submit" class="action-btn" name="decision" value="accept"
+                {% if not prediction %}disabled{% endif %}>Accept</button>
+        <button type="submit" class="action-btn" name="decision" value="modify"
+                {% if not prediction %}disabled{% endif %}>Modify</button>
+        <button type="submit" class="action-btn" name="decision" value="reject"
+                {% if not prediction %}disabled{% endif %}>Reject</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel form-panel" aria-labelledby="inputs-heading">
+    <h2 id="inputs-heading" class="panel-heading">Listing inputs</h2>
+
+    {% if errors %}
+    <div class="errors" role="alert">
+      <p class="errors-heading">{{ errors | length }} problem(s) with the input:</p>
+      <ul>
+        {% for error in errors %}
+        <li><strong>{{ error.label }}</strong>: {{ error.message }}</li>
+        {% endfor %}
+      </ul>
     </div>
+    {% endif %}
+
+    {% if field_groups %}
+    <p class="form-help">
+      Fields come from the feature list the model was trained on. Numeric
+      ranges are the range seen in training; a value outside it is refused
+      because the model has no evidence there. Leave the review scores blank
+      for a listing with no reviews.
+    </p>
+    <form method="post" action="{{ url_for('recommend') }}">
+      {% for category, specs in field_groups %}
+      <fieldset class="field-group">
+        <legend>{{ category }}</legend>
+        {% for spec in specs %}
+        <label class="field" for="field-{{ spec.name }}">
+          <span class="field-label">
+            {{ spec.label }}{% if not spec.required %} <span class="optional">(optional)</span>{% endif %}
+          </span>
+          {% if spec.kind == "choice" %}
+          <select id="field-{{ spec.name }}" name="{{ spec.name }}" required>
+            {% for choice in spec.choices %}
+            <option value="{{ choice }}"
+              {% if values.get(spec.name) | string == choice %}selected{% endif %}>{{ choice }}</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <input type="number" id="field-{{ spec.name }}" name="{{ spec.name }}"
+                 value="{{ values.get(spec.name) if values.get(spec.name) is not none else '' }}"
+                 step="{{ spec.step }}"
+                 {% if spec.minimum is not none %}min="{{ spec.minimum }}"{% endif %}
+                 {% if spec.maximum is not none %}max="{{ spec.maximum }}"{% endif %}
+                 {% if spec.placeholder %}placeholder="{{ spec.placeholder }}"{% endif %}
+                 {% if spec.required %}required{% endif %}>
+          {% endif %}
+        </label>
+        {% endfor %}
+      </fieldset>
+      {% endfor %}
+      <button type="submit" class="submit-btn">Get recommended price</button>
+    </form>
+    {% endif %}
   </section>
 
   <section class="panel demand" aria-labelledby="demand-heading">
     <h2 id="demand-heading" class="panel-heading">Demand signals</h2>
+    <p class="panel-note">Placeholder values; the platform dataset is not yet available.</p>
     <dl class="stats">
       <div><dt>Profile views (30 days)</dt><dd>{{ demand.profile_views_30d }}</dd></div>
       <div><dt>Booking requests (30 days)</dt><dd>{{ demand.booking_requests_30d }}</dd></div>

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Model Unavailable &middot; Mentor Pricing{% endblock %}
+
+{% block content %}
+<div class="dashboard single-column">
+  <section class="panel errors" role="alert" aria-labelledby="unavailable-heading">
+    <h2 id="unavailable-heading" class="panel-heading">
+      No price can be produced
+    </h2>
+    <p>{{ message }}</p>
+    <p>
+      Model artefacts are not committed to the repository, so a fresh checkout
+      has none until a training run has been done. Produce one with:
+    </p>
+    <pre><code>python -m src.models.train</code></pre>
+    <p><a href="{{ url_for('dashboard') }}">Back to the dashboard</a></p>
+  </section>
+</div>
+{% endblock %}

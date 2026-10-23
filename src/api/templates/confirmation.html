@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Decision Recorded &middot; Mentor Pricing{% endblock %}
+
+{% block content %}
+<div class="dashboard single-column">
+  <section class="panel" aria-labelledby="confirmation-heading">
+    <h2 id="confirmation-heading" class="panel-heading">Decision recorded</h2>
+
+    {% if confirmation.action == "accept" %}
+    <p class="confirmation-line">
+      You accepted the recommended price of
+      <strong>USD {{ "{:,.2f}".format(confirmation.final_price) }}</strong>.
+    </p>
+    {% elif confirmation.action == "modify" %}
+    <p class="confirmation-line">
+      You set your own price of
+      <strong>USD {{ "{:,.2f}".format(confirmation.final_price) }}</strong>,
+      instead of the recommended
+      USD {{ "{:,.2f}".format(confirmation.recommended_price) }}.
+    </p>
+    {% else %}
+    <p class="confirmation-line">
+      You rejected the recommended price of
+      USD {{ "{:,.2f}".format(confirmation.recommended_price) }}. No
+      replacement price was recorded.
+    </p>
+    {% endif %}
+
+    <p class="price-context">
+      Recorded against recommendation #{{ confirmation.recommendation_id }}.
+    </p>
+    <p>
+      <a href="{{ url_for('dashboard') }}">Back to the dashboard</a>
+      &middot;
+      <a href="{{ url_for('history') }}">See history</a>
+    </p>
+  </section>
+</div>
+{% endblock %}
