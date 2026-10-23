@@ -52,6 +52,10 @@ CV_FOLDS = 10  # 10-fold cross-validation (Raschka, 2016)
 #     with one listing) breaks the offset and the prediction overflows.
 #     room_type keeps the coarse signal with only 4 stable levels.
 # ---------------------------------------------------------------------------
+# Name of the derived no-review indicator. Defined here so the feature lists
+# below and src/preprocessing/reviews.py cannot disagree about the spelling.
+NO_REVIEWS_FLAG = "has_no_reviews"
+
 MENTOR_PROFILE_FEATURES: list[str] = [
     # Experience is split into whole years plus remaining months (0-11), so
     # both parts are needed: total months = years * 12 + months.
@@ -73,6 +77,12 @@ MENTOR_PERFORMANCE_FEATURES: list[str] = [
     "review_scores_value",
     "number_of_reviews",
     "host_is_superhost",  # awarded on rating and reliability metrics
+    # Derived, not a raw column. 2,792 priced listings have never been
+    # reviewed, so every review column above is structurally missing for
+    # them. The flag lets a model price "no track record" as its own state
+    # instead of inheriting the average rating from median imputation. See
+    # src/preprocessing/reviews.py.
+    NO_REVIEWS_FLAG,
 ]
 DEMAND_INDICATOR_FEATURES: list[str] = [
     "availability_30",
