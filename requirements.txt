@@ -25,6 +25,10 @@ python-dotenv==1.2.3
 # Model persistence
 joblib==1.4.2
 
+# Memory guard for scripts/train_experiments.py, which refuses to start a
+# forest fit when free RAM is below its floor.
+psutil==7.2.2
+
 # Visualisation (EDA)
 matplotlib==3.9.3
 seaborn==0.13.2
