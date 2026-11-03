@@ -77,7 +77,10 @@ class Base(DeclarativeBase):
 class Recommendation(Base):
     """One advisory price produced by the model for one set of inputs."""
 
-    __tablename__ = "recommendations"
+    # Renamed when the mentor-facing API took the "recommendations" name for
+    # its own table. This one belongs to the earlier dashboard prototype and
+    # has a different shape: see src/db/mentor_models.py.
+    __tablename__ = "legacy_recommendations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -110,11 +113,12 @@ class Recommendation(Base):
 class Decision(Base):
     """What the mentor did with one recommendation."""
 
-    __tablename__ = "decisions"
+    # Renamed alongside legacy_recommendations, for the same reason.
+    __tablename__ = "legacy_decisions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     recommendation_id: Mapped[int] = mapped_column(
-        ForeignKey("recommendations.id", ondelete="CASCADE"),
+        ForeignKey("legacy_recommendations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

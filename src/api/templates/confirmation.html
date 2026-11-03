@@ -13,19 +13,19 @@
     {% if confirmation.action == "accept" %}
     <p class="confirmation-line">
       You accepted the recommended price of
-      <strong>USD {{ "{:,.2f}".format(confirmation.final_price) }}</strong>.
+      <strong>AUD {{ "{:,.2f}".format(confirmation.final_price) }}</strong>.
     </p>
     {% elif confirmation.action == "modify" %}
     <p class="confirmation-line">
       You set your own price of
-      <strong>USD {{ "{:,.2f}".format(confirmation.final_price) }}</strong>,
+      <strong>AUD {{ "{:,.2f}".format(confirmation.final_price) }}</strong>,
       instead of the recommended
-      USD {{ "{:,.2f}".format(confirmation.recommended_price) }}.
+      AUD {{ "{:,.2f}".format(confirmation.recommended_price) }}.
     </p>
     {% else %}
     <p class="confirmation-line">
       You rejected the recommended price of
-      USD {{ "{:,.2f}".format(confirmation.recommended_price) }}. No
+      AUD {{ "{:,.2f}".format(confirmation.recommended_price) }}. No
       replacement price was recorded.
     </p>
     {% endif %}

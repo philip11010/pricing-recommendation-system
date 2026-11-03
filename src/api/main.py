@@ -66,9 +66,9 @@ RECENT_LIMIT = 5
 # Shown on every page. The proxy dataset is the single most important caveat
 # about this prototype, so it is part of the layout rather than a footnote.
 PROXY_BANNER = (
-    "Prototype trained on Inside Airbnb Sydney listings as a structural proxy "
-    "for mentor pricing. Output is a Sydney nightly price in USD, not a "
-    "mentorship rate."
+    "Prototype trained on a documented proxy dataset, described in the "
+    "project report. The price is advisory and in AUD: the mentor decides "
+    "what to charge."
 )
 
 # Invalid form input re-renders the page with the errors shown, so the status

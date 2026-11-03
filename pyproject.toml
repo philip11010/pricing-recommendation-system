@@ -17,3 +17,9 @@ extend-ignore-names = ["X", "X_*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+# Tests that cannot run without the prepared models in app_assets/, which
+# are a local build output and are not in the repository. They skip
+# themselves when the folder is absent, so CI stays green without them.
+markers = [
+    "app_assets: needs the prepared models in app_assets/ (run scripts/prepare_app_assets.py)",
+]

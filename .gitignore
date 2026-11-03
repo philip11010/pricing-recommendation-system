@@ -4,6 +4,11 @@ data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+# Application assets - everything the API loads at startup, built from a
+# local training run by scripts/prepare_app_assets.py. Build output, not
+# source: delete the folder and run the script again.
+app_assets/
+
 # Trained model artefacts
 models_store/*
 !models_store/.gitkeep

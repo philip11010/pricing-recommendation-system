@@ -20,6 +20,11 @@ python-multipart==0.0.20
 # Database
 psycopg2-binary==2.9.10
 SQLAlchemy==2.0.36
+
+# Schema migrations for the mentor-facing API tables. PostgreSQL is the
+# deployment target, so the schema has to be versioned rather than created
+# from the models on every boot.
+alembic==1.14.0
 python-dotenv==1.2.3
 
 # Model persistence

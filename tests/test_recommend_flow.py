@@ -237,10 +237,19 @@ def test_banner_is_on_every_page(client, path):
 
 
 def test_banner_names_the_proxy_the_currency_and_the_caveat():
-    assert "Inside Airbnb Sydney" in PROXY_BANNER
-    assert "structural proxy" in PROXY_BANNER
-    assert "USD" in PROXY_BANNER
-    assert "not a mentorship rate" in PROXY_BANNER
+    """
+    The banner has to say that the training data is a proxy, that the price is
+    in AUD, and that it is advice rather than a rate.
+
+    It no longer names the proxy dataset: nothing a mentor reads carries a
+    source-dataset term, and the dataset itself is identified in the project
+    report. The caveat is unchanged in substance.
+    """
+    assert "proxy dataset" in PROXY_BANNER
+    assert "project report" in PROXY_BANNER
+    assert "AUD" in PROXY_BANNER
+    assert "the mentor decides" in PROXY_BANNER
+    assert "Airbnb" not in PROXY_BANNER
 
 
 def test_banner_is_on_the_result_page(client):
@@ -302,7 +311,7 @@ def test_recommend_renders_a_price(client):
     response = client.post("/recommend", data=VALID_FORM)
 
     assert response.status_code == 200
-    assert "USD" in response.text
+    assert "AUD" in response.text
     assert re.search(r'price-value">[\d,]+\.\d{2}<', response.text)
 
 
@@ -376,8 +385,8 @@ def test_result_panel_does_not_quote_the_rmse(client):
 def test_comparison_card_shows_rmse_mae_and_r2(client):
     panel = comparison_panel(client.get("/"))
 
-    assert "RMSE (USD)" in panel
-    assert "MAE (USD)" in panel
+    assert "RMSE (AUD)" in panel
+    assert "MAE (AUD)" in panel
     assert "R2" in panel
 
 
