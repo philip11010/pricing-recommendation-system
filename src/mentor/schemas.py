@@ -157,24 +157,6 @@ class MentorRegistration(StrictModel):
         return mapping.validate_education_level(value)
 
 
-class MentorOut(BaseModel):
-    """A mentor's own record. The password hash is never serialised."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    full_name: str
-    email: str
-    headline: str | None
-    bio: str | None
-    education_level: str | None
-    experience_summary: str | None
-    credentials: str | None
-    years_mentoring_band: str
-    services_planned: int
-    created_at: datetime
-
-
 class ServiceOut(BaseModel):
     """One of a mentor's services."""
 
@@ -194,7 +176,118 @@ class ServiceOut(BaseModel):
     min_commitment: int
     skills: list[str]
     profile_verified: bool
+    current_price: int | None = Field(
+        default=None,
+        description=(
+            "What the mentor charges for this service today, in whole "
+            "currency units, or null if they have not set a price."
+        ),
+    )
     created_at: datetime
+
+
+class HistorySummaryOut(BaseModel):
+    """
+    A mentor's track record, in the figures worth putting on their own page.
+
+    A summary rather than the whole row. The table holds twenty-nine
+    quantities and most of them exist because a model takes them, not because
+    a mentor would want to read them: nobody needs their weekend booked share
+    minus their weekday one on their profile.
+
+    ``complete`` is the one that decides which model prices them, so it is
+    reported rather than left to be inferred from the rest.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    complete: bool = Field(
+        description=(
+            "True when every figure the more accurate model needs has a "
+            "value. A partial record is priced like no record at all."
+        )
+    )
+    top_rated_mentor: bool | None
+    reviews_total: int | None
+    reviews_last_12_months: int | None
+    reviews_per_month: float | None
+    rating_overall: float | None = Field(
+        default=None, description="Overall mentee rating, out of 5."
+    )
+    booked_share_90d: float | None = Field(
+        default=None,
+        description="Share of the mentor's offered time booked over 90 days.",
+    )
+    booked_share_365d: float | None = Field(
+        default=None,
+        description="Share of the mentor's offered time booked over a year.",
+    )
+    open_slots_next_year: int | None
+    days_since_last_review: int | None
+    years_since_first_review: float | None
+    tenure_years: float | None = Field(
+        default=None, description="How long the mentor has been on the platform."
+    )
+    updated_at: datetime
+
+
+class MentorOut(BaseModel):
+    """
+    A mentor's own record. The password hash is never serialised.
+
+    ``services`` and ``history`` are what distinguish an established mentor
+    from one who has just registered: the first carries what each service
+    currently charges, and the second is null until the platform has a record
+    to report.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    full_name: str
+    email: str
+    headline: str | None
+    bio: str | None
+    education_level: str | None
+    experience_summary: str | None
+    credentials: str | None
+    years_mentoring_band: str
+    services_planned: int
+    is_demo: bool = Field(
+        default=False,
+        description=(
+            "True for a mentor created by the demonstration seed script "
+            "rather than by someone registering."
+        ),
+    )
+    services: list[ServiceOut] = Field(default_factory=list)
+    history: HistorySummaryOut | None = Field(
+        default=None,
+        description="The mentor's track record, or null if they have none yet.",
+    )
+    created_at: datetime
+
+
+class DemoMentorOut(BaseModel):
+    """
+    One demonstration mentor, as the list of them is shown.
+
+    Deliberately thin. The list exists so that someone opening the demo can
+    pick a mentor to look at, and it is served without an identity header, so
+    it carries nothing that is not already on a mentor's public profile.
+    """
+
+    id: int
+    display_name: str
+    headline: str | None
+    field_label: str = Field(examples=["Technology and software"])
+    session_label: str = Field(examples=["One to one"])
+    has_history: bool = Field(
+        description=(
+            "True when the mentor has a complete track record and is "
+            "therefore priced by the more accurate model."
+        )
+    )
 
 
 class RecommendationOut(BaseModel):
@@ -228,6 +321,33 @@ class RecommendationOut(BaseModel):
     )
     model_version: str
     status: str
+    # The three below compare the advice with what the mentor charges today.
+    # All null together, for a service that has no current price: there is
+    # nothing to compare against, and a zero would read as a free session.
+    current_price: int | None = Field(
+        default=None,
+        description=(
+            "What the mentor charges for this service today, in whole "
+            "currency units, or null if they have not set a price."
+        ),
+    )
+    difference_vs_current_percent: float | None = Field(
+        default=None,
+        description=(
+            "How far the advice is from the current price, as a percentage "
+            "of the current price. Positive means the advice is higher."
+        ),
+        examples=[12.4],
+    )
+    position_vs_range: str | None = Field(
+        default=None,
+        description=(
+            "Where the current price sits relative to the advised range: "
+            '"below", "within" or "above". Both ends of the range count as '
+            '"within".'
+        ),
+        examples=["within"],
+    )
     generated_at: datetime
 
 
@@ -235,6 +355,20 @@ class RegistrationOut(BaseModel):
     """What registration returns: the mentor, the service and the first price."""
 
     mentor: MentorOut
+    service: ServiceOut
+    recommendation: RecommendationOut
+
+
+class ServiceCreatedOut(BaseModel):
+    """
+    What adding a service returns: the service and its first price.
+
+    The same pairing registration returns, for the same reason: a mentor who
+    has just described a service is waiting for the number, and making the
+    frontend ask for it separately would show them a service with no price
+    first.
+    """
+
     service: ServiceOut
     recommendation: RecommendationOut
 

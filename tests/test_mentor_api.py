@@ -1,11 +1,12 @@
 """
 Tests for the mentor-facing API.
 
-Three concerns. That the new-mentor path works end to end: options, register,
-price, read back. That a bad payload is refused with something a mentor could
-act on. And that one mentor can never see another's rows, which is the only
-security property the prototype has and the one that has to hold before
-authentication exists.
+Four concerns. That the new-mentor path works end to end: options, register,
+price, read back. That a mentor with a track record is priced by the other
+model, and shown their advice against what they charge today. That a bad
+payload is refused with something a mentor could act on. And that one mentor
+can never see another's rows, which is the only security property the
+prototype has and the one that has to hold before authentication exists.
 
 Most of the module needs the prepared models, so it is marked ``app_assets``.
 The handful of tests that do not need them say so by using the modelless
@@ -16,8 +17,11 @@ from __future__ import annotations
 
 import pytest
 
+from src.db.mentor_models import Mentor, MentorHistory, Service
 from src.mentor import mapping
 from src.mentor.dependencies import MENTOR_ID_HEADER
+
+from .conftest import SYNTHETIC_HISTORY
 
 pytestmark = pytest.mark.app_assets
 
@@ -55,6 +59,38 @@ def register(client, **overrides):
 
 def headers(mentor_id: int) -> dict[str, str]:
     return {MENTOR_ID_HEADER: str(mentor_id)}
+
+
+def give_history(sessions, mentor_id: int, **overrides) -> None:
+    """
+    Write a mentor a complete track record.
+
+    Through a session rather than an endpoint, because that is how a track
+    record comes into being: the platform computes it from the mentor's
+    activity, and there is no request a mentor could make that creates one.
+    """
+    with sessions() as session:
+        session.add(
+            MentorHistory(mentor_id=mentor_id, **{**SYNTHETIC_HISTORY, **overrides})
+        )
+        session.commit()
+
+
+def set_current_price(sessions, service_id: int, price: int | None) -> None:
+    """What the mentor charges for a service today. Also not asked at signup."""
+    with sessions() as session:
+        service = session.get(Service, service_id)
+        service.current_price = price
+        session.commit()
+
+
+def make_demo(sessions, mentor_id: int, source_key: int) -> None:
+    """Flag a registered mentor as one of the seeded demonstration mentors."""
+    with sessions() as session:
+        mentor = session.get(Mentor, mentor_id)
+        mentor.is_demo = True
+        mentor.source_key = source_key
+        session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -574,3 +610,434 @@ def test_the_recommendation_names_a_model_the_mapping_knows_about(client):
 
     assert recommendation["model_used"] == "core"
     assert len(mapping.CORE_COLUMNS) == 8
+
+
+# ---------------------------------------------------------------------------
+# An established mentor
+#
+# The other half of the system: a mentor with a track record is priced by the
+# second model, on their own time on the platform rather than on the
+# new-mentor constant, and the low-confidence flag goes away.
+# ---------------------------------------------------------------------------
+def test_a_mentor_with_a_track_record_is_priced_by_the_full_model(client, api_sessions):
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    give_history(api_sessions, mentor_id)
+
+    priced = client.post(
+        f"/services/{body['service']['id']}/recommendations",
+        headers=headers(mentor_id),
+    ).json()
+
+    assert priced["model_used"] == "full"
+    assert priced["low_confidence"] is False
+
+
+def test_a_track_record_changes_the_price_for_the_same_answers(client, api_sessions):
+    """
+    The point of the second model. Same profile, same service, same answers:
+    the only difference is that the platform now knows what the mentor has
+    actually done, and the price has to respond to it.
+    """
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    core_price = body["recommendation"]["recommended_price"]
+    give_history(api_sessions, mentor_id)
+
+    full = client.post(
+        f"/services/{body['service']['id']}/recommendations",
+        headers=headers(mentor_id),
+    ).json()
+
+    assert full["recommended_price"] != core_price
+    assert full["price_low"] < full["recommended_price"] < full["price_high"]
+
+
+def test_a_partial_track_record_keeps_the_mentor_on_the_core_model(
+    client, api_sessions
+):
+    """
+    The full model has no notion of a missing input, so a record with a gap in
+    it is worth no more than none at all and must not be half used.
+    """
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    incomplete = {**SYNTHETIC_HISTORY}
+    del incomplete["rating_overall"]
+    with api_sessions() as session:
+        session.add(MentorHistory(mentor_id=mentor_id, **incomplete))
+        session.commit()
+
+    priced = client.post(
+        f"/services/{body['service']['id']}/recommendations",
+        headers=headers(mentor_id),
+    ).json()
+
+    assert priced["model_used"] == "core"
+    assert priced["low_confidence"] is True
+
+
+def test_a_track_record_without_tenure_keeps_the_mentor_on_the_core_model(
+    client, api_sessions
+):
+    """Tenure is part of the record, so a row missing it is incomplete."""
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    without_tenure = {**SYNTHETIC_HISTORY}
+    del without_tenure[mapping.HISTORY_TENURE_FIELD]
+    with api_sessions() as session:
+        session.add(MentorHistory(mentor_id=mentor_id, **without_tenure))
+        session.commit()
+
+    priced = client.post(
+        f"/services/{body['service']['id']}/recommendations",
+        headers=headers(mentor_id),
+    ).json()
+
+    assert priced["model_used"] == "core"
+
+
+def test_the_full_price_is_the_one_the_prediction_service_gives(
+    client, api_sessions, pricing
+):
+    """
+    The API's full-model row, checked against the row built straight from the
+    mapping layer. A wired-up-wrong full path would still return a number.
+    """
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    give_history(api_sessions, mentor_id)
+
+    priced = client.post(
+        f"/services/{body['service']['id']}/recommendations",
+        headers=headers(mentor_id),
+    ).json()
+
+    expected = pricing.predict(
+        mapping.to_model_inputs(
+            field=REGISTRATION["service"]["field"],
+            max_mentees=REGISTRATION["service"]["max_mentees"],
+            min_commitment=REGISTRATION["service"]["min_commitment"],
+            skills=REGISTRATION["service"]["skills"],
+            profile_verified=REGISTRATION["service"]["profile_verified"],
+            services_planned=REGISTRATION["services_planned"],
+            services_count=1,
+        ),
+        mapping.history_to_model_inputs(SYNTHETIC_HISTORY),
+    )
+
+    assert priced["recommended_price"] == expected.recommended_price
+    assert priced["price_low"] == expected.price_low
+    assert priced["price_high"] == expected.price_high
+
+
+# ---------------------------------------------------------------------------
+# The advice against what the mentor charges now
+# ---------------------------------------------------------------------------
+def test_a_service_with_no_price_set_has_nothing_to_compare_against(client):
+    """All three comparison figures are null together, not zero."""
+    recommendation = register(client)["recommendation"]
+
+    assert recommendation["current_price"] is None
+    assert recommendation["difference_vs_current_percent"] is None
+    assert recommendation["position_vs_range"] is None
+
+
+def test_the_advice_is_reported_against_the_current_price(client, api_sessions):
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    service_id = body["service"]["id"]
+    set_current_price(api_sessions, service_id, 150)
+
+    priced = client.post(
+        f"/services/{service_id}/recommendations", headers=headers(mentor_id)
+    ).json()
+
+    assert priced["current_price"] == 150
+    assert priced["difference_vs_current_percent"] == round(
+        (priced["recommended_price"] - 150) / 150 * 100, 1
+    )
+    assert priced["position_vs_range"] in {"below", "within", "above"}
+
+
+@pytest.mark.parametrize(
+    ("offset", "expected"),
+    [(-10, "below"), (0, "within"), (10, "above")],
+)
+def test_each_position_against_the_range_is_reported(
+    client, api_sessions, offset, expected
+):
+    """
+    One case either side of the range and one inside it, set by moving the
+    current price relative to the range the mentor was actually given.
+    """
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    service_id = body["service"]["id"]
+    advice = body["recommendation"]
+
+    if expected == "below":
+        current = advice["price_low"] + offset
+    elif expected == "above":
+        current = advice["price_high"] + offset
+    else:
+        current = advice["recommended_price"]
+    set_current_price(api_sessions, service_id, current)
+
+    priced = client.post(
+        f"/services/{service_id}/recommendations", headers=headers(mentor_id)
+    ).json()
+
+    assert priced["current_price"] == current
+    assert priced["position_vs_range"] == expected
+
+
+def test_the_comparison_survives_a_read_back(client, api_sessions):
+    """
+    The three figures are derived on read rather than stored, so reading a
+    price back has to produce the same comparison.
+    """
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    set_current_price(api_sessions, body["service"]["id"], 200)
+    priced = client.post(
+        f"/services/{body['service']['id']}/recommendations",
+        headers=headers(mentor_id),
+    ).json()
+
+    read_back = client.get(
+        f"/recommendations/{priced['id']}", headers=headers(mentor_id)
+    ).json()
+
+    assert read_back == priced
+
+
+# ---------------------------------------------------------------------------
+# A mentor's own record
+# ---------------------------------------------------------------------------
+def test_a_mentors_record_lists_their_services_and_what_each_one_charges(
+    client, api_sessions
+):
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    set_current_price(api_sessions, body["service"]["id"], 240)
+
+    mentor = client.get(f"/mentors/{mentor_id}", headers=headers(mentor_id)).json()
+
+    assert [service["id"] for service in mentor["services"]] == [body["service"]["id"]]
+    assert mentor["services"][0]["current_price"] == 240
+
+
+def test_a_mentor_with_no_track_record_reports_none(client):
+    mentor_id = register(client)["mentor"]["id"]
+
+    mentor = client.get(f"/mentors/{mentor_id}", headers=headers(mentor_id)).json()
+
+    assert mentor["history"] is None
+
+
+def test_a_mentors_record_summarises_their_track_record_in_mentor_language(
+    client, api_sessions
+):
+    mentor_id = register(client)["mentor"]["id"]
+    give_history(api_sessions, mentor_id)
+
+    mentor = client.get(f"/mentors/{mentor_id}", headers=headers(mentor_id)).json()
+
+    history = mentor["history"]
+    assert history["complete"] is True
+    assert history["reviews_total"] == SYNTHETIC_HISTORY["reviews_total"]
+    assert history["rating_overall"] == SYNTHETIC_HISTORY["rating_overall"]
+    assert history["tenure_years"] == SYNTHETIC_HISTORY["tenure_years"]
+    for leaked in ("superhost", "occ_30", "review_scores_rating", "calendar"):
+        assert leaked not in str(history)
+
+
+def test_an_incomplete_track_record_says_it_is_incomplete(client, api_sessions):
+    mentor_id = register(client)["mentor"]["id"]
+    partial = {**SYNTHETIC_HISTORY}
+    del partial["reviews_per_month"]
+    with api_sessions() as session:
+        session.add(MentorHistory(mentor_id=mentor_id, **partial))
+        session.commit()
+
+    mentor = client.get(f"/mentors/{mentor_id}", headers=headers(mentor_id)).json()
+
+    assert mentor["history"]["complete"] is False
+    assert mentor["history"]["reviews_per_month"] is None
+
+
+# ---------------------------------------------------------------------------
+# Adding another service
+# ---------------------------------------------------------------------------
+SECOND_SERVICE = {
+    "field": "engineering",
+    "max_mentees": 4,
+    "min_commitment": 2,
+    "skills": ["portfolio_review", "career_planning"],
+    "profile_verified": True,
+}
+
+
+def test_a_mentor_can_add_another_service_and_is_given_a_price_for_it(client):
+    mentor_id = register(client)["mentor"]["id"]
+
+    response = client.post(
+        f"/mentors/{mentor_id}/services",
+        json=SECOND_SERVICE,
+        headers=headers(mentor_id),
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["service"]["mentor_id"] == mentor_id
+    assert body["service"]["field"] == "engineering"
+    assert body["service"]["session_label"] == "group"
+    assert body["recommendation"]["service_id"] == body["service"]["id"]
+    assert body["recommendation"]["recommended_price"] > 0
+
+
+def test_a_second_service_appears_on_the_mentors_record(client):
+    mentor_id = register(client)["mentor"]["id"]
+    client.post(
+        f"/mentors/{mentor_id}/services",
+        json=SECOND_SERVICE,
+        headers=headers(mentor_id),
+    )
+
+    mentor = client.get(f"/mentors/{mentor_id}", headers=headers(mentor_id)).json()
+
+    assert len(mentor["services"]) == 2
+
+
+def test_adding_a_service_moves_the_service_count_the_model_is_given(client):
+    """
+    A mentor who registered planning one service and then published a second
+    is priced as someone with a two-service offering, so the first service's
+    price changes when it is asked for again.
+    """
+    body = register(client, services_planned=1)
+    mentor_id = body["mentor"]["id"]
+    first_service = body["service"]["id"]
+    before = body["recommendation"]["recommended_price"]
+
+    client.post(
+        f"/mentors/{mentor_id}/services",
+        json=SECOND_SERVICE,
+        headers=headers(mentor_id),
+    )
+    after = client.post(
+        f"/services/{first_service}/recommendations", headers=headers(mentor_id)
+    ).json()
+
+    assert mapping.effective_services(2, 1) == 2
+    assert after["recommended_price"] != before
+
+
+def test_an_added_service_is_validated_the_same_way_as_the_first(client):
+    mentor_id = register(client)["mentor"]["id"]
+
+    response = client.post(
+        f"/mentors/{mentor_id}/services",
+        json={**SECOND_SERVICE, "max_mentees": 99},
+        headers=headers(mentor_id),
+    )
+
+    assert response.status_code == 422
+    errors = {error["field"]: error["message"] for error in response.json()["errors"]}
+    assert "mentees" in errors["max_mentees"].lower()
+
+
+def test_adding_a_service_needs_an_identity(client):
+    mentor_id = register(client)["mentor"]["id"]
+
+    response = client.post(f"/mentors/{mentor_id}/services", json=SECOND_SERVICE)
+
+    assert response.status_code == 401
+
+
+def test_a_service_cannot_be_added_to_another_mentor(client):
+    first = register(client)["mentor"]["id"]
+    second = register(client, email="other@example.com")["mentor"]["id"]
+
+    response = client.post(
+        f"/mentors/{second}/services",
+        json=SECOND_SERVICE,
+        headers=headers(first),
+    )
+
+    assert response.status_code == 404
+    # Refused rather than silently written somewhere else: the other mentor
+    # still has the one service they registered with.
+    other = client.get(f"/mentors/{second}", headers=headers(second)).json()
+    assert len(other["services"]) == 1
+
+
+def test_adding_a_service_without_models_explains_itself(modelless_client):
+    response = modelless_client.post(
+        "/mentors/1/services", json=SECOND_SERVICE, headers=headers(1)
+    )
+
+    assert response.status_code == 503
+    assert "prepare_app_assets" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# The demonstration list
+# ---------------------------------------------------------------------------
+def test_the_demo_list_is_empty_until_mentors_are_seeded(client):
+    assert client.get("/mentors/demo").json() == []
+
+
+def test_the_demo_list_needs_no_identity(client, api_sessions):
+    """It is the list someone picks an identity from, so requiring one would
+    be circular."""
+    mentor_id = register(client)["mentor"]["id"]
+    make_demo(api_sessions, mentor_id, source_key=1234)
+
+    response = client.get("/mentors/demo")
+
+    assert response.status_code == 200
+    assert [entry["id"] for entry in response.json()] == [mentor_id]
+
+
+def test_the_demo_list_describes_each_mentor_in_mentor_language(client, api_sessions):
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    make_demo(api_sessions, mentor_id, source_key=4321)
+    give_history(api_sessions, mentor_id)
+
+    entry = client.get("/mentors/demo").json()[0]
+
+    assert entry["display_name"] == REGISTRATION["full_name"]
+    assert entry["headline"] == REGISTRATION["headline"]
+    assert entry["field_label"] == "Technology and software"
+    assert entry["session_label"] == "One to one"
+    assert entry["has_history"] is True
+
+
+def test_the_demo_list_leaves_out_mentors_who_registered(client, api_sessions):
+    """
+    The list is for demonstration mentors. A real registration is not one,
+    whatever it looks like.
+    """
+    demo = register(client)["mentor"]["id"]
+    register(client, email="real@example.com")
+    make_demo(api_sessions, demo, source_key=99)
+
+    assert [entry["id"] for entry in client.get("/mentors/demo").json()] == [demo]
+
+
+def test_a_demo_mentor_without_a_complete_record_says_so(client, api_sessions):
+    mentor_id = register(client)["mentor"]["id"]
+    make_demo(api_sessions, mentor_id, source_key=7)
+
+    assert client.get("/mentors/demo").json()[0]["has_history"] is False
+
+
+def test_the_demo_list_works_without_models(modelless_client):
+    """
+    It names no price, so a server that cannot price anything can still serve
+    it and show the demo who is there.
+    """
+    assert modelless_client.get("/mentors/demo").status_code == 200

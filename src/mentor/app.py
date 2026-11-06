@@ -1,11 +1,11 @@
 """
 The mentor-facing pricing API.
 
-Six endpoints, covering the path a mentor takes the first time: read the form
-options, register with a first service, receive an advisory price, and read it
-back. A mentor with a track record is priced by the full model instead; that
-path exists in the prediction service and is reached once the track-record
-table is filled.
+Nine endpoints, covering two paths. A mentor registering for the first time
+reads the form options, registers with a first service, receives an advisory
+price and reads it back. A mentor who already has a track record is priced by
+the full model on the same endpoints, and their advice is shown against what
+they charge today.
 
 The price is advice. Nothing here sets a mentor's price: a recommendation is
 stored with status "pending" and stays that way until the mentor answers it,
@@ -47,17 +47,23 @@ from src.mentor.prediction import (
     ASSETS_MISSING_MESSAGE,
     AssetsUnavailableError,
     PricingService,
+    difference_vs_current_percent,
     load_pricing_service,
     per_mentee,
+    position_vs_range,
 )
 from src.mentor.schemas import (
+    DemoMentorOut,
     ErrorOut,
     HealthOut,
+    HistorySummaryOut,
     MentorOut,
     MentorRegistration,
     OptionsOut,
     RecommendationOut,
     RegistrationOut,
+    ServiceCreatedOut,
+    ServiceInput,
     ServiceOut,
 )
 
@@ -82,9 +88,15 @@ ignore it; the system never sets a price on their behalf.
 
 A newly registered mentor is priced from what they entered on the registration
 form. Those prices are marked `low_confidence`, because a form alone is a
-weaker basis than a track record. Once a mentor has a record of completed
-sessions and reviews, the same endpoints price them with a second, more
-accurate model and the flag goes away.
+weaker basis than a track record. Once a mentor has a complete record of
+completed sessions and reviews, the same endpoints price them with a second,
+more accurate model, their own time on the platform replaces the constant the
+first model is given, and the flag goes away.
+
+A service that records what the mentor charges today gets its advice compared
+against it: `current_price`, `difference_vs_current_percent`, and
+`position_vs_range`, which says whether what they charge is below, within or
+above the advised range. All three are null for a service with no price set.
 
 Every price comes with two sets of figures. `recommended_price`, `price_low`
 and `price_high` are the session: one booking, one price, however many
@@ -103,6 +115,10 @@ TAGS: list[dict[str, Any]] = [
     {"name": "service", "description": "Liveness and form options."},
     {"name": "mentors", "description": "Registration and a mentor's own record."},
     {"name": "pricing", "description": "Advisory prices for a mentor's services."},
+    {
+        "name": "demo",
+        "description": "Mentors seeded so there is something to demonstrate.",
+    },
 ]
 
 ERROR_RESPONSE = {"model": ErrorOut}
@@ -264,16 +280,61 @@ def complete_history(session: Session, mentor_id: int) -> dict[str, Any] | None:
 
     The full model has no notion of a missing input, so a partial record is no
     better than none: an incomplete row means the core model is used and the
-    price is marked low confidence. Part 2 fills this table; until then there
-    are no rows and this always returns None.
+    price is marked low confidence. A mentor who has never taken a session has
+    no row at all, which is the same answer.
+
+    The translated row carries the tenure column as well as the twenty-eight
+    track-record ones, so merging it over a core row is what replaces the
+    new-mentor tenure constant with the mentor's own time on the platform.
     """
     record = session.get(MentorHistory, mentor_id)
-    if record is None:
+    if record is None or not record.is_complete:
         return None
-    values = {name: getattr(record, name, None) for name in mapping.HISTORY_FIELDS}
-    if any(value is None for value in values.values()):
-        return None
-    return mapping.history_to_model_inputs(values)
+    return mapping.history_to_model_inputs(record.stored_values())
+
+
+def as_history_summary(record: MentorHistory) -> HistorySummaryOut:
+    """
+    One track record as the figures a mentor is shown on their own page.
+
+    ``complete`` comes first because it is the one that explains the rest of
+    the response: a record that is not complete is why a price is still
+    marked low confidence.
+    """
+    summary = {
+        name: getattr(record, name)
+        for name in HistorySummaryOut.model_fields
+        if name not in ("complete",)
+    }
+    return HistorySummaryOut(complete=record.is_complete, **summary)
+
+
+def as_mentor(mentor: Mentor) -> MentorOut:
+    """
+    A mentor's record, with their services and a summary of their history.
+
+    Built here rather than validated straight off the ORM object, because the
+    history on the response is a summary in mentor language and the row behind
+    it holds twenty-nine quantities that exist for a model to read.
+    """
+    return MentorOut(
+        id=mentor.id,
+        full_name=mentor.full_name,
+        email=mentor.email,
+        headline=mentor.headline,
+        bio=mentor.bio,
+        education_level=mentor.education_level,
+        experience_summary=mentor.experience_summary,
+        credentials=mentor.credentials,
+        years_mentoring_band=mentor.years_mentoring_band,
+        services_planned=mentor.services_planned,
+        is_demo=bool(mentor.is_demo),
+        services=[ServiceOut.model_validate(service) for service in mentor.services],
+        history=(
+            as_history_summary(mentor.history) if mentor.history is not None else None
+        ),
+        created_at=mentor.created_at,
+    )
 
 
 def recommend_for_service(
@@ -328,7 +389,9 @@ def recommend_for_service(
     return record
 
 
-def as_recommendation(record: PricingRecommendation) -> RecommendationOut:
+def as_recommendation(
+    record: PricingRecommendation, current_price: int | None = None
+) -> RecommendationOut:
     """
     One stored recommendation, in the response shape.
 
@@ -337,8 +400,24 @@ def as_recommendation(record: PricingRecommendation) -> RecommendationOut:
     from the row's own input snapshot, not from the service as it stands now:
     a mentor who changes the number of seats afterwards must not change what
     an old price says each mentee was paying.
+
+    ``current_price`` is read from the service as it stands now, and that is
+    the right way round: the comparison answers "what should I charge instead
+    of what I charge today", so it has to be against today's price rather than
+    against whatever was set when the advice was given.
     """
     mentees = mapping.max_mentees_from_inputs(record.inputs_snapshot)
+    comparison: dict[str, Any] = {}
+    if current_price is not None and current_price > 0:
+        comparison = {
+            "current_price": int(current_price),
+            "difference_vs_current_percent": difference_vs_current_percent(
+                record.recommended_price, int(current_price)
+            ),
+            "position_vs_range": position_vs_range(
+                int(current_price), record.price_low, record.price_high
+            ),
+        }
     return RecommendationOut(
         id=record.id,
         service_id=record.service_id,
@@ -354,6 +433,7 @@ def as_recommendation(record: PricingRecommendation) -> RecommendationOut:
         model_version=record.model_version,
         status=record.status,
         generated_at=record.generated_at,
+        **comparison,
     )
 
 
@@ -463,10 +543,57 @@ async def register_mentor(
 
     record = recommend_for_service(session, pricing, service, mentor)
     return RegistrationOut(
-        mentor=MentorOut.model_validate(mentor),
+        mentor=as_mentor(mentor),
         service=ServiceOut.model_validate(service),
-        recommendation=as_recommendation(record),
+        recommendation=as_recommendation(record, service.current_price),
     )
+
+
+# Declared before /mentors/{mentor_id}, because routes are matched in the
+# order they are added and "demo" would otherwise be read as a mentor id.
+@app.get(
+    "/mentors/demo",
+    tags=["demo"],
+    response_model=list[DemoMentorOut],
+    summary="The mentors seeded for the demonstration",
+)
+async def read_demo_mentors(
+    session: Session = Depends(get_session),
+) -> list[DemoMentorOut]:
+    """
+    Every mentor created by ``scripts/seed_demo_mentors.py``.
+
+    No identity header: this is the list someone picks an identity *from*, so
+    requiring one would be circular. It carries nothing a mentee could not
+    already read on a mentor's public profile.
+
+    The mentors are fictional and so is everything about them except the shape
+    of the record, which comes from the dataset the models were trained on.
+    """
+    mentors = session.scalars(
+        select(Mentor).where(Mentor.is_demo.is_(True)).order_by(Mentor.id)
+    ).all()
+
+    listed = []
+    for mentor in mentors:
+        service = mentor.services[0] if mentor.services else None
+        listed.append(
+            DemoMentorOut(
+                id=mentor.id,
+                display_name=mentor.full_name,
+                headline=mentor.headline,
+                field_label=(
+                    mapping.field_label(service.field) if service is not None else ""
+                ),
+                session_label=(
+                    mapping.SESSION_LABELS[service.session_label]
+                    if service is not None
+                    else ""
+                ),
+                has_history=(mentor.history is not None and mentor.history.is_complete),
+            )
+        )
+    return listed
 
 
 @app.get(
@@ -484,6 +611,9 @@ async def read_mentor(
     """
     The mentor's own record, and only their own.
 
+    Includes every service with what it currently charges, and, for a mentor
+    who has one, a summary of their track record in mentor language.
+
     Asking for another mentor's id returns 404 rather than 403: 403 would
     confirm that the other mentor exists.
     """
@@ -494,7 +624,62 @@ async def read_mentor(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
         )
-    return MentorOut.model_validate(mentor)
+    return as_mentor(mentor)
+
+
+@app.post(
+    "/mentors/{mentor_id}/services",
+    tags=["mentors"],
+    response_model=ServiceCreatedOut,
+    status_code=status.HTTP_201_CREATED,
+    responses={401: ERROR_RESPONSE, 404: ERROR_RESPONSE, 503: ERROR_RESPONSE},
+    summary="Add another service, and price it",
+)
+async def add_service(
+    mentor_id: int,
+    payload: ServiceInput,
+    session: Session = Depends(get_session),
+    current_mentor_id: int = Depends(get_current_mentor_id),
+    pricing: PricingService = Depends(get_pricing),
+) -> ServiceCreatedOut:
+    """
+    A second or later service for a mentor who already exists.
+
+    The same questions, the same validation and the same mapping as the
+    service asked for at registration: there is one description of a service
+    in the system, not one for the first and another for the rest.
+
+    Adding a service moves the service count the model is given, so the price
+    this returns is not necessarily the price the same answers would have got
+    as a first service. That is the intended behaviour rather than a quirk:
+    see ``mapping.effective_services``.
+    """
+    mentor = session.scalar(
+        select(Mentor).where(Mentor.id == mentor_id, Mentor.id == current_mentor_id)
+    )
+    if mentor is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
+        )
+
+    service = Service(
+        mentor_id=mentor.id,
+        session_label=mapping.session_label(payload.max_mentees),
+        field=payload.field,
+        max_mentees=payload.max_mentees,
+        min_commitment=payload.min_commitment,
+        skills=list(payload.skills),
+        profile_verified=payload.profile_verified,
+    )
+    session.add(service)
+    session.commit()
+    session.refresh(service)
+
+    record = recommend_for_service(session, pricing, service, mentor)
+    return ServiceCreatedOut(
+        service=ServiceOut.model_validate(service),
+        recommendation=as_recommendation(record, service.current_price),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +713,7 @@ async def create_recommendation(
             status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
         )
     record = recommend_for_service(session, pricing, service, mentor)
-    return as_recommendation(record)
+    return as_recommendation(record, service.current_price)
 
 
 @app.get(
@@ -545,4 +730,4 @@ async def read_recommendation(
 ) -> RecommendationOut:
     """One of the mentor's own recommendations, scoped through its service."""
     record = owned_recommendation(session, recommendation_id, current_mentor_id)
-    return as_recommendation(record)
+    return as_recommendation(record, record.service.current_price)

@@ -370,11 +370,16 @@ def test_the_core_mapping_produces_eight_columns():
     assert set(inputs) == set(mapping.CORE_COLUMNS)
 
 
-def test_the_track_record_mapping_produces_twenty_eight_columns():
-    history = dict.fromkeys(mapping.HISTORY_FIELDS, 0)
+def test_the_track_record_mapping_produces_the_columns_the_full_model_adds():
+    """
+    Twenty-nine columns from twenty-nine stored quantities: the twenty-eight
+    the full model adds, plus the core tenure column, which a mentor with a
+    record supplies instead of the new-mentor constant.
+    """
+    history = dict.fromkeys(mapping.HISTORY_STORED_FIELDS, 0)
     columns = mapping.history_to_model_inputs(history)
-    assert len(columns) == 28
-    assert set(columns) == set(mapping.HISTORY_COLUMNS)
+    assert len(columns) == 29
+    assert set(columns) == set(mapping.HISTORY_COLUMNS) | {mapping.COLUMN_TENURE}
 
 
 def test_the_full_column_set_is_the_core_set_plus_the_track_record():
@@ -383,19 +388,309 @@ def test_the_full_column_set_is_the_core_set_plus_the_track_record():
 
 
 def test_an_incomplete_track_record_is_refused_by_name():
-    history = dict.fromkeys(mapping.HISTORY_FIELDS, 0)
+    history = dict.fromkeys(mapping.HISTORY_STORED_FIELDS, 0)
     del history["rating_overall"]
     with pytest.raises(MentorInputError) as error:
         mapping.history_to_model_inputs(history)
     assert "rating_overall" in error.value.message
 
 
+def test_a_track_record_without_tenure_is_refused():
+    """
+    The full path is priced on the mentor's own time on the platform, so a
+    record that does not carry it is incomplete rather than silently priced
+    on the new-mentor constant.
+    """
+    history = dict.fromkeys(mapping.HISTORY_STORED_FIELDS, 0)
+    del history[mapping.HISTORY_TENURE_FIELD]
+    with pytest.raises(MentorInputError) as error:
+        mapping.history_to_model_inputs(history)
+    assert mapping.HISTORY_TENURE_FIELD in error.value.message
+
+
 def test_an_unknown_track_record_entry_is_refused():
-    history = dict.fromkeys(mapping.HISTORY_FIELDS, 0)
+    history = dict.fromkeys(mapping.HISTORY_STORED_FIELDS, 0)
     history["favourite_colour"] = "blue"
     with pytest.raises(MentorInputError) as error:
         mapping.history_to_model_inputs(history)
     assert "favourite_colour" in error.value.message
+
+
+# ---------------------------------------------------------------------------
+# Track record: name by name, and what each value may be
+#
+# The translation is the part of the system with the least margin for error.
+# Every name here lands under a different heading in the row the model is
+# given, and a pair swapped between two columns of the same type produces a
+# price rather than a failure: a mentor's rating read as their punctuality
+# score, or their weekday booked share read as their weekend one, is a number
+# in range and the model will happily price it.
+# ---------------------------------------------------------------------------
+HISTORY_COLUMN_FOR_FIELD = {
+    "top_rated_mentor": "host_is_superhost",
+    "reviews_total": "number_of_reviews",
+    "reviews_last_12_months": "number_of_reviews_ltm",
+    "reviews_per_month": "reviews_per_month",
+    "rating_overall": "review_scores_rating",
+    "rating_accuracy": "review_scores_accuracy",
+    "rating_preparedness": "review_scores_cleanliness",
+    "rating_onboarding": "review_scores_checkin",
+    "rating_communication": "review_scores_communication",
+    "rating_accessibility": "review_scores_location",
+    "rating_value": "review_scores_value",
+    "open_slots_next_year": "availability_365",
+    "booked_share_30d": "occ_30",
+    "booked_share_60d": "occ_60",
+    "booked_share_90d": "occ_90",
+    "booked_share_365d": "occ_365",
+    "booked_share_weekend_365d": "weekend_occ_365",
+    "booked_share_weekday_365d": "weekday_occ_365",
+    "booked_share_weekend_minus_weekday": "weekend_minus_weekday_occ",
+    "availability_blocks_365d": "n_availability_blocks_365",
+    "reviews_90d": "reviews_last_90d",
+    "reviews_180d": "reviews_last_180d",
+    "reviews_365d": "reviews_last_365d",
+    "days_since_last_review": "days_since_last_review",
+    "review_growth": "review_growth",
+    "years_since_first_review": "first_review_age_years",
+    "has_no_reviews": "has_no_reviews",
+    "has_booking_data": "has_calendar_data",
+}
+
+# A value that is valid for the field and distinguishable from the ones the
+# other fields of its type are given, so a translation that crosses two
+# columns shows up as a wrong value rather than as a plausible one.
+HISTORY_PROBE_VALUES: dict[str, object] = {
+    "top_rated_mentor": True,
+    "reviews_total": 71,
+    "reviews_last_12_months": 23,
+    "reviews_per_month": 1.37,
+    "rating_overall": 4.81,
+    "rating_accuracy": 4.72,
+    "rating_preparedness": 4.63,
+    "rating_onboarding": 4.54,
+    "rating_communication": 4.45,
+    "rating_accessibility": 4.36,
+    "rating_value": 4.27,
+    "open_slots_next_year": 183,
+    "booked_share_30d": 0.61,
+    "booked_share_60d": 0.52,
+    "booked_share_90d": 0.43,
+    "booked_share_365d": 0.34,
+    "booked_share_weekend_365d": 0.47,
+    "booked_share_weekday_365d": 0.29,
+    "booked_share_weekend_minus_weekday": 0.18,
+    "availability_blocks_365d": 9,
+    "reviews_90d": 4,
+    "reviews_180d": 11,
+    "reviews_365d": 23,
+    "days_since_last_review": 17,
+    "review_growth": 1.24,
+    "years_since_first_review": 3.75,
+    "has_no_reviews": False,
+    "has_booking_data": True,
+    mapping.HISTORY_TENURE_FIELD: 4.5,
+}
+
+
+def test_the_probe_values_cover_every_stored_field():
+    """Guards the two tests below from silently skipping a new field."""
+    assert set(HISTORY_PROBE_VALUES) == set(mapping.HISTORY_STORED_FIELDS)
+    assert set(HISTORY_COLUMN_FOR_FIELD) == set(mapping.HISTORY_FIELDS)
+
+
+@pytest.mark.parametrize(("name", "column"), sorted(HISTORY_COLUMN_FOR_FIELD.items()))
+def test_each_track_record_field_lands_under_its_own_model_column(name, column):
+    columns = mapping.history_to_model_inputs(dict(HISTORY_PROBE_VALUES))
+
+    expected = HISTORY_PROBE_VALUES[name]
+    # The flags are stored as true and false and given to the model as 1
+    # and 0, which is the one type the two vocabularies disagree on.
+    assert columns[column] == (
+        int(expected) if isinstance(expected, bool) else expected
+    )
+
+
+def test_the_mentors_own_tenure_replaces_the_new_mentor_constant():
+    """
+    The reason the tenure column is in the translated row at all: merged over
+    a core row, it is what distinguishes an established mentor from a new one
+    whose tenure is a constant.
+    """
+    columns = mapping.history_to_model_inputs(dict(HISTORY_PROBE_VALUES))
+
+    assert columns[mapping.COLUMN_TENURE] == 4.5
+    assert columns[mapping.COLUMN_TENURE] != mapping.NEW_MENTOR_TENURE_YEARS
+
+
+def test_the_translated_names_are_exactly_the_columns_the_full_model_adds():
+    core = mapping.to_model_inputs(**answers())
+    translated = mapping.history_to_model_inputs(dict(HISTORY_PROBE_VALUES))
+
+    assert set(core) | set(translated) == set(mapping.FULL_COLUMNS)
+    assert len(mapping.FULL_COLUMNS) == len(set(mapping.FULL_COLUMNS)) == 36
+
+
+def test_a_track_record_round_trips_through_the_translation():
+    """
+    Translating to model columns and back gives the same record, which is what
+    makes the reverse direction usable for writing a record from a row.
+    """
+    columns = mapping.history_to_model_inputs(dict(HISTORY_PROBE_VALUES))
+
+    assert mapping.model_inputs_to_history(columns) == HISTORY_PROBE_VALUES
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        # Ratings are out of five.
+        ("rating_overall", 5.5),
+        ("rating_value", -0.1),
+        # Booked shares are proportions of the mentor's offered time.
+        ("booked_share_30d", 1.4),
+        ("booked_share_365d", -0.2),
+        # One share minus another cannot exceed either of them.
+        ("booked_share_weekend_minus_weekday", 1.5),
+        ("booked_share_weekend_minus_weekday", -1.5),
+        # Counts are whole and cannot be negative.
+        ("reviews_total", -1),
+        ("reviews_total", 12.5),
+        ("days_since_last_review", -3),
+        ("open_slots_next_year", -1),
+        # Measured quantities cannot be negative.
+        ("reviews_per_month", -0.5),
+        ("years_since_first_review", -1.0),
+        (mapping.HISTORY_TENURE_FIELD, -0.25),
+        # Flags are one thing or the other.
+        ("top_rated_mentor", 2),
+        ("has_booking_data", "yes"),
+        # Nothing numeric may be absent, text or infinite.
+        ("rating_overall", None),
+        ("reviews_total", "forty"),
+        ("review_growth", float("inf")),
+    ],
+)
+def test_a_track_record_value_outside_what_it_can_be_is_refused(name, value):
+    history = {**HISTORY_PROBE_VALUES, name: value}
+
+    with pytest.raises(MentorInputError) as error:
+        mapping.history_to_model_inputs(history)
+
+    assert error.value.field == name
+    assert name in error.value.message
+
+
+def test_a_track_record_error_does_not_name_the_source_dataset():
+    """
+    The messages are operational rather than for a mentor, but they still
+    travel: one of them can reach an API response body.
+    """
+    with pytest.raises(MentorInputError) as error:
+        mapping.history_to_model_inputs({**HISTORY_PROBE_VALUES, "rating_overall": 9})
+
+    message = error.value.message.lower()
+    for leaked in ("review_scores", "superhost", "occ_", "calendar", "listing"):
+        assert leaked not in message
+
+
+@pytest.mark.parametrize("flag", sorted(mapping.HISTORY_FLAG_FIELDS))
+@pytest.mark.parametrize("stored", [True, False, 1, 0])
+def test_a_flag_reaches_the_model_as_one_or_zero(flag, stored):
+    """
+    Either spelling a database may hand back, in the one form the model was
+    trained on.
+    """
+    columns = mapping.history_to_model_inputs({**HISTORY_PROBE_VALUES, flag: stored})
+
+    assert columns[mapping.HISTORY_FIELDS[flag]] == int(bool(stored))
+
+
+# ---------------------------------------------------------------------------
+# The derivations the seed script needs, which belong here because they are
+# the inverse of translations this module already owns
+# ---------------------------------------------------------------------------
+def test_every_field_can_be_recovered_from_its_market_segment():
+    for field_id, spec in mapping.FIELDS.items():
+        assert mapping.field_from_column_value(spec["column_value"]) == field_id
+
+
+def test_a_market_segment_outside_the_twelve_fields_is_refused():
+    with pytest.raises(MentorInputError):
+        mapping.field_from_column_value("Nowhere In Particular")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(0, 1), (1, 1), (2, 1), (3, 2), (20, 10), (60, 30), (200, 30)],
+)
+def test_a_skills_count_is_recovered_and_held_inside_the_list(value, expected):
+    assert mapping.skills_count_from_column_value(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1, 1), (2, 2), (4, 3), (6, 5), (7, 7), (30, 7), (0, 1)],
+)
+def test_a_commitment_lands_on_an_option_the_form_offers(value, expected):
+    chosen = mapping.nearest_min_commitment(value)
+
+    assert chosen == expected
+    assert chosen in mapping.MIN_COMMITMENT_OPTIONS
+
+
+@pytest.mark.parametrize(
+    ("tenure", "band"),
+    [
+        (0.0, "under_1"),
+        (0.5, "under_1"),
+        (1.0, "1_to_2"),
+        (2.9, "1_to_2"),
+        (3.0, "3_to_5"),
+        (5.9, "3_to_5"),
+        (6.0, "6_to_10"),
+        (10.5, "6_to_10"),
+        (11.0, "over_10"),
+        (20.0, "over_10"),
+    ],
+)
+def test_a_tenure_maps_to_an_experience_band_the_form_offers(tenure, band):
+    derived = mapping.years_mentoring_band_for_tenure(tenure)
+
+    assert derived == band
+    assert derived in mapping.YEARS_MENTORING_BANDS
+
+
+# ---------------------------------------------------------------------------
+# The column check
+# ---------------------------------------------------------------------------
+def test_the_column_check_accepts_the_lists_this_module_describes():
+    mapping.check_model_columns(mapping.CORE_COLUMNS, mapping.FULL_COLUMNS)
+
+
+def test_a_renamed_model_column_is_refused_and_named():
+    full = list(mapping.FULL_COLUMNS)
+    full[-1] = "has_schedule_data"
+
+    with pytest.raises(mapping.ModelColumnsMismatchError) as error:
+        mapping.check_model_columns(mapping.CORE_COLUMNS, full)
+
+    assert "has_schedule_data" in str(error.value)
+    assert mapping.FULL_COLUMNS[-1] in str(error.value)
+
+
+def test_a_reordered_model_column_list_is_refused():
+    """
+    The row is assembled in the model's order, so the same names in a
+    different order would hand every value to the wrong column.
+    """
+    full = list(mapping.FULL_COLUMNS)
+    full[0], full[1] = full[1], full[0]
+
+    with pytest.raises(mapping.ModelColumnsMismatchError) as error:
+        mapping.check_model_columns(mapping.CORE_COLUMNS, full)
+
+    assert "order" in str(error.value)
 
 
 # ---------------------------------------------------------------------------

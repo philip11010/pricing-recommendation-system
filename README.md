@@ -39,7 +39,8 @@ make clean     # clear caches
 
 ## Running the pricing API
 
-Three steps, in order. The first two are only needed once.
+Three steps, in order, and an optional fourth. The first two are only needed
+once.
 
 ### 1. Prepare the application assets
 
@@ -100,16 +101,83 @@ A server without prepared models still starts. `/health` reports
 form can render, and any endpoint that needs a price returns 503 with an
 explanation rather than failing.
 
+### 4. Seed the demonstration mentors (optional)
+
+On a fresh database every mentor is a new mentor, because nobody has taken a
+session yet. The existing-mentor half of the system therefore has nobody on it
+and cannot be shown. This step supplies five established mentors:
+
+```bash
+python scripts/seed_demo_mentors.py            # create the five
+python scripts/seed_demo_mentors.py --reset    # remove them again
+```
+
+It prints a table of what it wrote: the mentor, their field, their group size,
+what they charge today, the advised price and range, and whether what they
+charge is below, within or above that range.
+
+The five are chosen from the population the models were fitted on, so each
+one's track record is internally consistent in the way a real one is: rating,
+review counts, booked shares and tenure all describe the same provider. They
+are chosen to be worth looking at rather than at random, with five different
+fields, five different group sizes, and five different price levels relative
+to the advice. One of them charges clearly above their recommended range, one
+within it and one below it, which is what makes the comparison on a
+recommendation demonstrable.
+
+Exactly one of the five takes a single mentee and the other four take two or
+more, so both session labels appear. A session for one is not a smaller group:
+it is labelled `one_to_one` rather than `group`, and its per-mentee figures
+equal its session figures rather than being a division of them. The one-to-one
+mentor is given one of the three price levels inside the range where the
+population allows it, because the two levels outside the range are the cases
+the comparison exists to show and are better spent on a group mentor. The
+script says so in its output if the population cannot supply a one-to-one
+mentor at all.
+
+The people are fictional. The names come from a fixed pool and are a first
+name and an initial, every address is at `example.com`, and the profile text
+is a template per field. Nothing identifying is copied from the dataset: the
+only link back to a source row is `source_key`, a position in the filtered
+population, which exists so that running the script twice recognises the
+mentors it already wrote. Running it again creates nothing; `--reset` removes
+the seeded mentors and everything belonging to them and leaves mentors who
+registered alone.
+
+It needs both the prepared models and the processed dataset, and fails with
+the name of whichever is missing. Both are git-ignored.
+
 ### Endpoints
 
-| Method | Path                                   | Purpose                                               |
-| ------ | -------------------------------------- | ----------------------------------------------------- |
-| GET    | `/health`                              | Liveness, and whether a price can be produced         |
-| GET    | `/meta/options`                        | Every option list the registration form needs         |
-| POST   | `/mentors`                             | Register a mentor and first service, and price it     |
-| GET    | `/mentors/{id}`                        | A mentor's own record                                 |
-| POST   | `/services/{service_id}/recommendations` | Price one of the mentor's services again            |
-| GET    | `/recommendations/{id}`                | Read back one advisory price                          |
+| Method | Path                                     | Purpose                                           |
+| ------ | ---------------------------------------- | ------------------------------------------------- |
+| GET    | `/health`                                | Liveness, and whether a price can be produced     |
+| GET    | `/meta/options`                          | Every option list the registration form needs     |
+| POST   | `/mentors`                               | Register a mentor and first service, and price it |
+| GET    | `/mentors/demo`                          | The mentors seeded for the demonstration          |
+| GET    | `/mentors/{id}`                          | A mentor's own record                             |
+| POST   | `/mentors/{id}/services`                 | Add another service, and price it                 |
+| POST   | `/services/{service_id}/recommendations` | Price one of the mentor's services again          |
+| GET    | `/recommendations/{id}`                  | Read back one advisory price                      |
+
+`/mentors/demo` is the one mentor-related endpoint that needs no identity
+header: it is the list someone picks an identity from, so requiring one would
+be circular. It carries nothing that is not already on a mentor's public
+profile, and it answers on a server with no models because it names no price.
+
+`GET /mentors/{id}` returns the mentor's services with what each one currently
+charges, and, for a mentor who has a track record, a summary of it in mentor
+language: whether they hold the top-rated badge, their review counts and
+rating, their booked shares, how long since their last review and how long
+they have been on the platform. `complete` on that summary says whether every
+figure the more accurate model needs has a value, which is what decides how
+they are priced.
+
+`POST /mentors/{id}/services` asks the same questions as registration, with
+the same validation and the same mapping. Adding a service moves the service
+count the model is given, so the price it returns is not necessarily the price
+the same answers would have had as a first service: see
+`mapping.effective_services`.
 
 Every advisory price comes back as two sets of three figures. The session
 total is `recommended_price` with `price_low` and `price_high` around it: one
@@ -156,6 +224,47 @@ form alone is a weaker basis than a record of completed sessions. Once a
 mentor has a track record, the same endpoints price them with a second model
 that takes 28 further inputs and is measurably more accurate, and the flag
 goes away.
+
+### How an existing mentor differs from a new one
+
+Same endpoints, same questions, same responses. Three things change, and all
+three follow from the mentor having a `mentor_history` row rather than from
+anything they do differently.
+
+**Which model prices them.** A mentor with a complete track record is priced
+by the full model, and the response says `model_used: "full"` with
+`low_confidence: false`. A mentor with no row, or with a row that is missing
+any of its figures, is priced by the core model and the flag stays. There is
+no half-way case: the full model has no notion of a missing input, so a
+partial record is worth no more than none at all.
+
+**Where their tenure comes from.** A new mentor's time on the platform is the
+constant `NEW_MENTOR_TENURE_YEARS`, because there is only one honest answer
+for someone who has just joined. A mentor with a record has a real figure and
+is priced on it. That is why `mentor_history` holds 29 quantities for a model
+that takes 28 extra columns: the 29th is tenure, and it replaces a core
+column rather than adding one.
+
+**What their advice is shown against.** A service may record what the mentor
+charges today, as `current_price`. When it does, every recommendation for that
+service also reports `difference_vs_current_percent`, which is how far the
+advice is from the current price as a percentage of it, and
+`position_vs_range`, which is `"below"`, `"within"` or `"above"` depending on
+where the current price falls relative to the advised range. Both ends of the
+range count as `"within"`: a mentor charging exactly the low end is charging
+something the system advised. All three are null together for a service with
+no price set, rather than zero, which would read as a free session. They are
+derived on read from the service's price as it stands now, not stored, because
+the question they answer is what to charge instead of what is charged today.
+
+The track record is written by the platform rather than by the mentor, and
+there is no endpoint that creates one: it is computed from their activity.
+Its columns carry mentor-facing names, and
+`src/mentor/mapping.py` is the only place each one meets the model column it
+translates to. The application checks at startup that those translated names
+are exactly the columns the loaded model was fitted on, in order, and refuses
+to serve a price if they are not: a model handed the right values under the
+wrong headings answers with a plausible number rather than an error.
 
 ### Two inputs that are decided rather than asked
 
@@ -236,6 +345,14 @@ clone without a local training run still runs green:
 ```bash
 pytest -m "not app_assets"    # skip them explicitly
 pytest -m app_assets          # run only those
+```
+
+The tests for the demonstration seed script also need the processed dataset,
+and are marked `dataset` as well. They skip with a message naming where the
+dataset comes from:
+
+```bash
+pytest -m "not dataset"       # skip them explicitly
 ```
 
 ---

@@ -19,8 +19,10 @@ import pytest
 from src.mentor import mapping
 from src.mentor.prediction import (
     AssetsUnavailableError,
+    difference_vs_current_percent,
     load_pricing_service,
     per_mentee,
+    position_vs_range,
 )
 
 from .conftest import SYNTHETIC_HISTORY
@@ -84,6 +86,133 @@ def test_each_model_declares_the_columns_it_was_fitted_on(pricing):
 def test_the_loaded_columns_are_the_ones_the_mapping_produces(pricing):
     assert pricing.columns["core"] == mapping.CORE_COLUMNS
     assert pricing.columns["full"] == mapping.FULL_COLUMNS
+
+
+def test_the_translated_track_record_names_are_the_full_models_columns(pricing):
+    """
+    The claim the startup check makes, against the metadata the application
+    actually loaded rather than against the constants in the mapping module.
+
+    A core row plus a translated track record has to be exactly the full
+    model's column list: one name over or under and the row would be built
+    from a different vocabulary than the one the model was fitted on.
+    """
+    core = mapping.to_model_inputs(**BASE_ANSWERS)
+    history = history_inputs()
+    assembled = {**core, **history}
+
+    assert tuple(pricing.columns["full"]) == mapping.FULL_COLUMNS
+    assert set(assembled) == set(pricing.columns["full"])
+    assert len(assembled) == 36
+
+
+def test_a_track_record_replaces_the_new_mentor_tenure(pricing):
+    """
+    The full row carries the mentor's own time on the platform, not the
+    constant the core path is given.
+    """
+    core = mapping.to_model_inputs(**BASE_ANSWERS)
+    assembled = {**core, **history_inputs()}
+
+    assert core[mapping.COLUMN_TENURE] == mapping.NEW_MENTOR_TENURE_YEARS
+    assert assembled[mapping.COLUMN_TENURE] == SYNTHETIC_HISTORY["tenure_years"]
+
+
+def test_a_model_fitted_on_other_columns_fails_to_load(tmp_path, pricing):
+    """
+    A retrained model whose columns the mapping layer does not describe is
+    refused rather than served. It would otherwise be handed values under the
+    wrong headings and answer with a plausible but wrong price.
+    """
+    import json
+    import shutil
+
+    from src.mentor.prediction import APP_ASSETS_DIR
+
+    shutil.copytree(APP_ASSETS_DIR, tmp_path / "assets")
+    info_path = tmp_path / "assets" / "model_info.json"
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    info["models"]["full"]["input_columns"][-1] = "has_schedule_data"
+    info_path.write_text(json.dumps(info), encoding="utf-8")
+
+    with pytest.raises(AssetsUnavailableError) as error:
+        load_pricing_service(tmp_path / "assets")
+
+    assert "prepare_app_assets" in str(error.value) or "mapping.py" in str(error.value)
+
+
+# ---------------------------------------------------------------------------
+# Many rows at once
+# ---------------------------------------------------------------------------
+def test_scoring_many_rows_gives_the_same_prices_as_scoring_them_one_by_one(
+    pricing,
+):
+    """
+    The batch path is what the demonstration seed script chooses candidates
+    with, and ``predict`` is one call to it, so the two cannot be allowed to
+    produce different numbers.
+    """
+    from src.mentor.prediction import FULL
+
+    history = history_inputs()
+    rows = [{**model_inputs(max_mentees=mentees), **history} for mentees in SWEEP_SIZES]
+
+    batch = pricing.predict_many(rows, FULL)
+    one_by_one = [
+        pricing.predict(model_inputs(max_mentees=mentees), history)
+        for mentees in SWEEP_SIZES
+    ]
+
+    assert [advice.as_dict() for advice in batch] == [
+        advice.as_dict() for advice in one_by_one
+    ]
+
+
+def test_scoring_no_rows_gives_no_prices(pricing):
+    from src.mentor.prediction import FULL
+
+    assert pricing.predict_many([], FULL) == []
+
+
+# ---------------------------------------------------------------------------
+# Comparing the advice with what the mentor charges now
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("current", "expected"),
+    [
+        (99, "below"),
+        (100, "within"),
+        (150, "within"),
+        (200, "within"),
+        (201, "above"),
+    ],
+)
+def test_a_current_price_is_placed_against_the_range(current, expected):
+    """
+    Both ends count as within: a mentor charging exactly the low end is
+    charging something the system advised.
+    """
+    assert position_vs_range(current, 100, 200) == expected
+
+
+@pytest.mark.parametrize(
+    ("recommended", "current", "expected"),
+    [
+        (120, 100, 20.0),
+        (80, 100, -20.0),
+        (100, 100, 0.0),
+        (175, 140, 25.0),
+    ],
+)
+def test_the_difference_is_a_percentage_of_what_the_mentor_charges_now(
+    recommended, current, expected
+):
+    assert difference_vs_current_percent(recommended, current) == expected
+
+
+def test_a_difference_against_no_price_is_refused_rather_than_infinite():
+    with pytest.raises(ValueError):
+        difference_vs_current_percent(200, 0)
 
 
 def test_a_missing_assets_folder_fails_with_a_message_naming_the_fix(tmp_path):

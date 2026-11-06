@@ -380,21 +380,22 @@ def test_the_three_actions_are_the_three_the_mentor_is_offered(db_session):
 # ---------------------------------------------------------------------------
 # Track record
 # ---------------------------------------------------------------------------
-def test_the_track_record_table_is_empty_for_now(db_session, stored):
-    """Part 2 fills it. Until then every price comes from the core model."""
+def test_a_mentor_starts_with_no_track_record(db_session, stored):
+    """Until the platform writes one, every price comes from the core model."""
     assert db_session.scalars(select(MentorHistory)).all() == []
 
 
 def test_the_track_record_table_holds_every_extra_model_input(db_session):
     """
     One column per extra input of the full model, under its mentor-facing
-    name. A name in one place and not the other would be a column the model
-    can never be given.
+    name, plus tenure. A name in one place and not the other would be a column
+    the model can never be given.
     """
     columns = set(inspect(MentorHistory).columns.keys())
 
-    assert set(mapping.HISTORY_FIELDS) <= columns
+    assert set(mapping.HISTORY_STORED_FIELDS) <= columns
     assert len(mapping.HISTORY_FIELDS) == 28
+    assert len(mapping.HISTORY_STORED_FIELDS) == 29
 
 
 def test_a_track_record_round_trips(db_session):
@@ -404,20 +405,40 @@ def test_a_track_record_round_trips(db_session):
     db_session.add(
         MentorHistory(
             mentor_id=mentor.id,
-            total_reviews=40,
+            reviews_total=40,
             rating_overall=4.8,
-            booked_rate_90d=0.5,
-            top_mentor=True,
+            booked_share_90d=0.5,
+            top_rated_mentor=True,
+            tenure_years=4.0,
             updated_at=datetime.now(UTC),
         )
     )
     db_session.commit()
 
     record = db_session.scalar(select(MentorHistory))
-    assert record.total_reviews == 40
-    assert record.top_mentor is True
+    assert record.reviews_total == 40
+    assert record.top_rated_mentor is True
     # Not yet computed, which is what keeps a mentor on the core model.
     assert record.reviews_per_month is None
+    assert record.is_complete is False
+
+
+def test_a_complete_track_record_says_so(db_session):
+    """
+    ``is_complete`` is what decides which model prices the mentor, so it is
+    checked against a row that has everything rather than inferred.
+    """
+    from .conftest import SYNTHETIC_HISTORY
+
+    mentor = make_mentor()
+    db_session.add(mentor)
+    db_session.commit()
+    db_session.add(MentorHistory(mentor_id=mentor.id, **SYNTHETIC_HISTORY))
+    db_session.commit()
+
+    record = db_session.scalar(select(MentorHistory))
+    assert record.is_complete is True
+    assert set(record.stored_values()) == set(mapping.HISTORY_STORED_FIELDS)
 
 
 def test_deleting_a_mentor_removes_their_track_record(db_session):

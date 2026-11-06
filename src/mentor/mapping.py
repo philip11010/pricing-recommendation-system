@@ -32,6 +32,8 @@ Two inputs are decided here rather than asked, and both are deliberate:
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
 from typing import Any
 
 CURRENCY = "AUD"
@@ -274,43 +276,127 @@ EDUCATION_LEVELS: dict[str, str] = {
 # core ones, each behind a mentor-facing name. The table that stores them uses
 # these names; the translation to model columns happens here.
 #
-# Part 2 fills the table from platform activity. For now the map exists so the
-# table, the full model and the prediction service all agree on one spelling
-# per quantity.
+# The order is the order the full model was fitted in, which is the core
+# columns followed by these. :func:`check_model_columns` holds that claim
+# against the metadata the application loads, so a retrained model that
+# reorders or renames a column is caught at startup rather than priced on.
 # ---------------------------------------------------------------------------
 HISTORY_FIELDS: dict[str, str] = {
-    "top_mentor": "host_is_superhost",
-    "total_reviews": "number_of_reviews",
-    "reviews_last_year": "number_of_reviews_ltm",
+    "top_rated_mentor": "host_is_superhost",
+    "reviews_total": "number_of_reviews",
+    "reviews_last_12_months": "number_of_reviews_ltm",
     "reviews_per_month": "reviews_per_month",
     "rating_overall": "review_scores_rating",
     "rating_accuracy": "review_scores_accuracy",
-    "rating_preparation": "review_scores_cleanliness",
-    "rating_punctuality": "review_scores_checkin",
+    "rating_preparedness": "review_scores_cleanliness",
+    "rating_onboarding": "review_scores_checkin",
     "rating_communication": "review_scores_communication",
-    "rating_relevance": "review_scores_location",
+    "rating_accessibility": "review_scores_location",
     "rating_value": "review_scores_value",
-    "open_slots_365d": "availability_365",
-    "booked_rate_30d": "occ_30",
-    "booked_rate_60d": "occ_60",
-    "booked_rate_90d": "occ_90",
-    "booked_rate_365d": "occ_365",
-    "weekend_booked_rate_365d": "weekend_occ_365",
-    "weekday_booked_rate_365d": "weekday_occ_365",
-    "weekend_minus_weekday_booked_rate": "weekend_minus_weekday_occ",
+    "open_slots_next_year": "availability_365",
+    "booked_share_30d": "occ_30",
+    "booked_share_60d": "occ_60",
+    "booked_share_90d": "occ_90",
+    "booked_share_365d": "occ_365",
+    "booked_share_weekend_365d": "weekend_occ_365",
+    "booked_share_weekday_365d": "weekday_occ_365",
+    "booked_share_weekend_minus_weekday": "weekend_minus_weekday_occ",
     "availability_blocks_365d": "n_availability_blocks_365",
-    "reviews_last_90d": "reviews_last_90d",
-    "reviews_last_180d": "reviews_last_180d",
-    "reviews_last_365d": "reviews_last_365d",
+    "reviews_90d": "reviews_last_90d",
+    "reviews_180d": "reviews_last_180d",
+    "reviews_365d": "reviews_last_365d",
     "days_since_last_review": "days_since_last_review",
     "review_growth": "review_growth",
-    "first_review_age_years": "first_review_age_years",
+    "years_since_first_review": "first_review_age_years",
     "has_no_reviews": "has_no_reviews",
-    "has_schedule_data": "has_calendar_data",
+    "has_booking_data": "has_calendar_data",
 }
 
 HISTORY_COLUMNS: tuple[str, ...] = tuple(HISTORY_FIELDS.values())
 FULL_COLUMNS: tuple[str, ...] = CORE_COLUMNS + HISTORY_COLUMNS
+
+# Tenure is the twenty-ninth quantity the track-record table stores and not a
+# twenty-ninth column: it carries the tenure the core mapping holds at
+# NEW_MENTOR_TENURE_YEARS for someone who has just joined. A mentor with a
+# record has a real figure, so the record supplies it and the constant is only
+# ever used for a mentor who has none.
+HISTORY_TENURE_FIELD = "tenure_years"
+
+# Everything the track-record table holds, which is one more name than the
+# full model has extra columns.
+HISTORY_STORED_FIELDS: tuple[str, ...] = (*HISTORY_FIELDS, HISTORY_TENURE_FIELD)
+
+# ---------------------------------------------------------------------------
+# What a track-record value may be
+#
+# The table is written by the platform rather than typed by a mentor, so these
+# bounds are not form validation: they are the assertion that a row which
+# reaches the full model describes something possible. A rating of 9 or a
+# booked share of 4 would still produce a price, and a plausible-looking one,
+# which is exactly why it is refused here instead.
+# ---------------------------------------------------------------------------
+RATING_MAX = 5.0
+
+# Stored as true or false, given to the model as 1 or 0.
+HISTORY_FLAG_FIELDS: tuple[str, ...] = (
+    "top_rated_mentor",
+    "has_no_reviews",
+    "has_booking_data",
+)
+
+# Each out of five.
+HISTORY_RATING_FIELDS: tuple[str, ...] = (
+    "rating_overall",
+    "rating_accuracy",
+    "rating_preparedness",
+    "rating_onboarding",
+    "rating_communication",
+    "rating_accessibility",
+    "rating_value",
+)
+
+# A proportion of the mentor's offered time, so zero to one.
+HISTORY_SHARE_FIELDS: tuple[str, ...] = (
+    "booked_share_30d",
+    "booked_share_60d",
+    "booked_share_90d",
+    "booked_share_365d",
+    "booked_share_weekend_365d",
+    "booked_share_weekday_365d",
+)
+
+# One share minus another, so either side of zero.
+HISTORY_DIFFERENCE_FIELDS: tuple[str, ...] = ("booked_share_weekend_minus_weekday",)
+
+# Whole things that have happened or are open, so zero or more.
+HISTORY_COUNT_FIELDS: tuple[str, ...] = (
+    "reviews_total",
+    "reviews_last_12_months",
+    "reviews_90d",
+    "reviews_180d",
+    "reviews_365d",
+    "open_slots_next_year",
+    "availability_blocks_365d",
+    "days_since_last_review",
+)
+
+# Measured quantities that are not whole, and cannot be negative.
+HISTORY_MEASURE_FIELDS: tuple[str, ...] = (
+    "reviews_per_month",
+    "review_growth",
+    "years_since_first_review",
+    HISTORY_TENURE_FIELD,
+)
+
+
+class ModelColumnsMismatchError(RuntimeError):
+    """
+    The loaded models do not take the columns this module produces.
+
+    A build fault rather than a mentor's mistake, so it is not a
+    :class:`MentorInputError`: nothing a mentor could type would cause it and
+    no answer they could change would fix it.
+    """
 
 
 class MentorInputError(ValueError):
@@ -547,30 +633,256 @@ def to_model_inputs(
     }
 
 
+def _history_number(name: str, value: Any) -> float:
+    """One track-record value as a finite number, or a message naming it."""
+    if isinstance(value, bool):
+        raise MentorInputError(
+            name, f"{name} is a number in the mentor's track record, not a flag."
+        )
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise MentorInputError(
+            name, f"{name} has to be a number in the mentor's track record."
+        ) from error
+    if not math.isfinite(number):
+        raise MentorInputError(
+            name, f"{name} has to be a number in the mentor's track record."
+        )
+    return number
+
+
+def _history_between(name: str, value: Any, low: float, high: float) -> float:
+    number = _history_number(name, value)
+    if not low <= number <= high:
+        raise MentorInputError(
+            name,
+            f"{name} has to be between {low:g} and {high:g} in the mentor's "
+            f"track record.",
+        )
+    return number
+
+
+def _history_flag(name: str, value: Any) -> bool:
+    """
+    A stored flag as a boolean, whichever way the database handed it over.
+
+    Zero and one are accepted as well as the booleans, because a driver may
+    return either for a boolean column. The model was trained on 1 and 0 and
+    is given those by :func:`history_to_model_inputs`; everything on the
+    mentor-facing side of the translation deals in true and false.
+    """
+    if isinstance(value, bool):
+        return value
+    number = _history_number(name, value)
+    if number not in (0.0, 1.0):
+        raise MentorInputError(
+            name,
+            f"{name} is either true or false in the mentor's track record.",
+        )
+    return bool(number)
+
+
+def _history_count(name: str, value: Any) -> int:
+    number = _history_number(name, value)
+    if number < 0 or number != int(number):
+        raise MentorInputError(
+            name,
+            f"{name} has to be a whole number of zero or more in the mentor's "
+            f"track record.",
+        )
+    return int(number)
+
+
+def validate_history_value(name: str, value: Any) -> Any:
+    """
+    One track-record value, checked against what that quantity can be.
+
+    The name decides the rule, so a field added to :data:`HISTORY_FIELDS`
+    without being listed in one of the groups above fails loudly here rather
+    than passing unchecked.
+    """
+    if name in HISTORY_FLAG_FIELDS:
+        return _history_flag(name, value)
+    if name in HISTORY_RATING_FIELDS:
+        return _history_between(name, value, 0.0, RATING_MAX)
+    if name in HISTORY_SHARE_FIELDS:
+        return _history_between(name, value, 0.0, 1.0)
+    if name in HISTORY_DIFFERENCE_FIELDS:
+        return _history_between(name, value, -1.0, 1.0)
+    if name in HISTORY_COUNT_FIELDS:
+        return _history_count(name, value)
+    if name in HISTORY_MEASURE_FIELDS:
+        return _history_between(name, value, 0.0, float("inf"))
+    raise MentorInputError(name, f"{name} is not part of the mentor's track record.")
+
+
 def history_to_model_inputs(history: dict[str, Any]) -> dict[str, Any]:
     """
-    Translate a mentor's track record into the twenty-eight extra columns.
+    Translate a mentor's track record into the columns the full model adds.
 
     Takes the mentor-facing names used by the track-record table and returns
-    model columns. Every field must be present: the full model has no notion
-    of a missing column, and a mentor with an incomplete record should be
-    priced by the core model instead.
+    model columns: the twenty-eight extra ones, plus the core tenure column,
+    because a mentor with a record is priced on the tenure in it rather than
+    on the new-mentor constant. Merging the result over a core row is
+    therefore the whole of the difference between the two paths.
+
+    Every field must be present. The full model has no notion of a missing
+    column, so a mentor with an incomplete record is priced by the core model
+    instead, and that decision belongs to the caller that reads the row rather
+    than to a silent default here.
     """
-    missing = sorted(set(HISTORY_FIELDS) - set(history))
+    expected = set(HISTORY_STORED_FIELDS)
+    missing = sorted(expected - set(history))
     if missing:
         raise MentorInputError(
             "history",
             f"The mentor's track record is incomplete, so a price cannot be "
             f"based on it. Missing: {', '.join(missing)}.",
         )
-    unexpected = sorted(set(history) - set(HISTORY_FIELDS))
+    unexpected = sorted(set(history) - expected)
     if unexpected:
         raise MentorInputError(
             "history",
             f"The mentor's track record has entries the model does not use: "
             f"{', '.join(unexpected)}.",
         )
-    return {column: history[name] for name, column in HISTORY_FIELDS.items()}
+
+    # The flags are the one place the two vocabularies disagree on a type:
+    # the table stores true and false, and the model was trained on 1 and 0.
+    values: dict[str, Any] = {}
+    for name, column in HISTORY_FIELDS.items():
+        checked = validate_history_value(name, history[name])
+        values[column] = int(checked) if name in HISTORY_FLAG_FIELDS else checked
+    values[COLUMN_TENURE] = float(
+        validate_history_value(HISTORY_TENURE_FIELD, history[HISTORY_TENURE_FIELD])
+    )
+    return values
+
+
+def model_inputs_to_history(values: dict[str, Any]) -> dict[str, Any]:
+    """
+    The inverse: model columns back to the names the table stores.
+
+    Needed by anything holding a row of model columns that has to write it as
+    a mentor's track record. Without it a caller would have to know the column
+    spellings, which is the one thing this module exists to prevent.
+    """
+    needed = (*HISTORY_COLUMNS, COLUMN_TENURE)
+    missing = [column for column in needed if column not in values]
+    if missing:
+        raise MentorInputError(
+            "history",
+            f"These columns are needed to build a track record and were not "
+            f"supplied: {', '.join(missing)}.",
+        )
+    history = {
+        name: validate_history_value(name, values[column])
+        for name, column in HISTORY_FIELDS.items()
+    }
+    history[HISTORY_TENURE_FIELD] = validate_history_value(
+        HISTORY_TENURE_FIELD, values[COLUMN_TENURE]
+    )
+    return history
+
+
+def check_model_columns(core: Sequence[str], full: Sequence[str]) -> None:
+    """
+    Hold the loaded models' column lists against this module's, or fail.
+
+    Both lists have to match name for name and in order. The translation above
+    assembles a row from these names, so a retrained model that renames or
+    reorders a column would otherwise be handed values under the wrong
+    headings: every input present, every one of them wrong, and a plausible
+    price out the other end. Checked once at startup for that reason.
+    """
+    for what, declared, expected in (
+        ("core", tuple(str(column) for column in core), CORE_COLUMNS),
+        ("full", tuple(str(column) for column in full), FULL_COLUMNS),
+    ):
+        if declared == expected:
+            continue
+        extra = [column for column in declared if column not in expected]
+        absent = [column for column in expected if column not in declared]
+        detail = []
+        if extra:
+            detail.append(f"columns this application cannot supply: {extra}")
+        if absent:
+            detail.append(f"columns it supplies and the model does not take: {absent}")
+        if not detail:
+            detail.append("the same columns in a different order")
+        raise ModelColumnsMismatchError(
+            f"the {what} model takes {len(declared)} columns and "
+            f"src/mentor/mapping.py describes {len(expected)}: " + "; ".join(detail)
+        )
+
+
+def field_from_column_value(value: Any) -> str:
+    """
+    The field id bound to one value of the model's market column.
+
+    The inverse of the ``column_value`` entries in :data:`FIELDS`, for a
+    caller holding a row of model columns that has to describe it as a
+    mentor's field.
+    """
+    for field_id, spec in FIELDS.items():
+        if spec["column_value"] == value:
+            return field_id
+    raise MentorInputError(
+        "field", "That market segment is not bound to one of the twelve fields."
+    )
+
+
+def field_label(field_id: Any) -> str:
+    """The label a mentor reads for a field id."""
+    return FIELDS[validate_field(field_id)]["label"]
+
+
+def skills_count_from_column_value(value: Any) -> int:
+    """
+    How many skills a breadth-of-offering value stands for.
+
+    The inverse of :func:`skills_to_column_value`, rounded because the column
+    is not always an even number, and held between one and the length of the
+    list: a mentor offers at least one skill and cannot offer more than the
+    list holds.
+    """
+    count = round(_history_number("skills", value) / SKILL_WEIGHT)
+    return int(min(max(count, 1), SKILL_COUNT))
+
+
+def nearest_min_commitment(value: Any) -> int:
+    """
+    The offered commitment option closest to ``value``.
+
+    The form offers five fixed choices, and anything translated into one of
+    them has to land on a choice rather than near it. Ties go to the smaller
+    option, which is the one that asks less of a mentee.
+    """
+    number = _history_number("min_commitment", value)
+    return min(
+        MIN_COMMITMENT_OPTIONS, key=lambda option: (abs(option - number), option)
+    )
+
+
+def years_mentoring_band_for_tenure(tenure_years: Any) -> str:
+    """
+    The experience band a length of time falls in.
+
+    Profile text, like the band the form asks for. It is derived here only so
+    that a mentor whose record carries a tenure is shown a band consistent
+    with it rather than one picked at random.
+    """
+    years = _history_number(HISTORY_TENURE_FIELD, tenure_years)
+    if years < 1:
+        return "under_1"
+    if years < 3:
+        return "1_to_2"
+    if years < 6:
+        return "3_to_5"
+    if years < 11:
+        return "6_to_10"
+    return "over_10"
 
 
 def get_form_options() -> dict[str, Any]:

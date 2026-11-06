@@ -16,8 +16,9 @@ model:
     constraint holds the two together.
 ``mentor_history``
     A mentor's accumulated track record, in mentor-facing names. One row per
-    mentor, written by the platform rather than by the mentor. Empty for now:
-    part 2 fills it, and until then every price comes from the core model.
+    mentor, written by the platform rather than by the mentor. A mentor with a
+    complete row is priced by the full model; a mentor with none, or with a
+    partial one, is priced by the core model.
 ``recommendations``
     What the model advised, with the exact inputs it was given. The snapshot
     is stored so a price can be explained months later, after the mentor has
@@ -55,6 +56,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.db.models import Base, UtcDateTime, utcnow
 from src.mentor.mapping import (
     GROUP_FROM_MENTEES,
+    HISTORY_STORED_FIELDS,
     LABEL_GROUP,
     LABEL_ONE_TO_ONE,
     MAX_MENTEES_MAX,
@@ -106,6 +108,19 @@ class Mentor(Base):
     # Asked once, at registration. Feeds the model together with the number of
     # services actually published: see mapping.effective_services.
     services_planned: Mapped[int] = mapped_column(Integer, nullable=False)
+    # A mentor created by scripts/seed_demo_mentors.py to have something to
+    # demonstrate. Flagged rather than inferred from the email domain, so the
+    # seed script can find its own rows again and remove exactly those.
+    is_demo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", index=True
+    )
+    # Which record a seeded mentor was built from, as an opaque index into the
+    # filtered population rather than anything identifying. Unique so that a
+    # second run of the seed script recognises the rows it already wrote
+    # instead of adding them again, and null for every mentor who registered.
+    source_key: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime, default=utcnow, nullable=False, index=True
     )
@@ -154,6 +169,12 @@ class Service(Base):
     profile_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    # What the mentor charges for this service today, in whole currency units,
+    # or null if they have not set one. Nullable because a service may exist
+    # before it has a price: that is the whole point of asking for advice.
+    # Whole units for the same reason a recommendation is stored that way, so
+    # the two can be compared without one of them pretending to be finer.
+    current_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime, default=utcnow, nullable=False, index=True
     )
@@ -171,6 +192,14 @@ class Service(Base):
             name="ck_service_max_mentees",
         ),
         CheckConstraint("min_commitment >= 1", name="ck_service_min_commitment"),
+        # NULL is tested explicitly: "current_price > 0" against NULL is NULL
+        # rather than FALSE, and a CHECK only rejects a row on FALSE, so the
+        # comparison alone would be no constraint at all on a priceless row
+        # while also failing to say that null is allowed.
+        CheckConstraint(
+            "current_price IS NULL OR current_price > 0",
+            name="ck_service_current_price_positive",
+        ),
         CheckConstraint(
             f"(max_mentees < {GROUP_FROM_MENTEES} "
             f"   AND session_label = '{LABEL_ONE_TO_ONE}') "
@@ -209,42 +238,52 @@ class MentorHistory(Base):
     )
 
     # Standing
-    top_mentor: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    top_rated_mentor: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Reviews
-    total_reviews: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    reviews_last_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviews_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviews_last_12_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reviews_per_month: Mapped[float | None] = mapped_column(Float, nullable=True)
-    reviews_last_90d: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    reviews_last_180d: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    reviews_last_365d: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviews_90d: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviews_180d: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviews_365d: Mapped[int | None] = mapped_column(Integer, nullable=True)
     days_since_last_review: Mapped[int | None] = mapped_column(Integer, nullable=True)
     review_growth: Mapped[float | None] = mapped_column(Float, nullable=True)
-    first_review_age_years: Mapped[float | None] = mapped_column(Float, nullable=True)
+    years_since_first_review: Mapped[float | None] = mapped_column(Float, nullable=True)
     has_no_reviews: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Ratings, each out of five
     rating_overall: Mapped[float | None] = mapped_column(Float, nullable=True)
     rating_accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rating_preparation: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rating_punctuality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rating_preparedness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rating_onboarding: Mapped[float | None] = mapped_column(Float, nullable=True)
     rating_communication: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rating_relevance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rating_accessibility: Mapped[float | None] = mapped_column(Float, nullable=True)
     rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Demand: how much of the mentor's offered time gets booked
-    open_slots_365d: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    booked_rate_30d: Mapped[float | None] = mapped_column(Float, nullable=True)
-    booked_rate_60d: Mapped[float | None] = mapped_column(Float, nullable=True)
-    booked_rate_90d: Mapped[float | None] = mapped_column(Float, nullable=True)
-    booked_rate_365d: Mapped[float | None] = mapped_column(Float, nullable=True)
-    weekend_booked_rate_365d: Mapped[float | None] = mapped_column(Float, nullable=True)
-    weekday_booked_rate_365d: Mapped[float | None] = mapped_column(Float, nullable=True)
-    weekend_minus_weekday_booked_rate: Mapped[float | None] = mapped_column(
+    open_slots_next_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    booked_share_30d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    booked_share_60d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    booked_share_90d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    booked_share_365d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    booked_share_weekend_365d: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    booked_share_weekday_365d: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    booked_share_weekend_minus_weekday: Mapped[float | None] = mapped_column(
         Float, nullable=True
     )
     availability_blocks_365d: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    has_schedule_data: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_booking_data: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # Time on the platform. Not one of the twenty-eight extra columns: it
+    # carries the core tenure column, which the mapping layer holds at a
+    # constant for a mentor who has just joined and reads from here for a
+    # mentor who has a record.
+    tenure_years: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, default=utcnow, nullable=False
@@ -252,8 +291,32 @@ class MentorHistory(Base):
 
     mentor: Mapped[Mentor] = relationship(back_populates="history")
 
+    def stored_values(self) -> dict[str, Any]:
+        """
+        The row as the mentor-facing names the mapping layer translates.
+
+        Reading the row through one method rather than at each call site keeps
+        the list of what a track record consists of in
+        src.mentor.mapping.HISTORY_STORED_FIELDS alone.
+        """
+        return {name: getattr(self, name, None) for name in HISTORY_STORED_FIELDS}
+
+    @property
+    def is_complete(self) -> bool:
+        """
+        Whether every quantity the full model needs has a value.
+
+        The full model has no notion of a missing input, so a partial row is
+        worth no more than none at all: it means the core model is used and
+        the price stays marked low confidence.
+        """
+        return all(value is not None for value in self.stored_values().values())
+
     def __repr__(self) -> str:
-        return f"MentorHistory(mentor_id={self.mentor_id!r})"
+        return (
+            f"MentorHistory(mentor_id={self.mentor_id!r}, "
+            f"complete={self.is_complete!r})"
+        )
 
 
 class PricingRecommendation(Base):

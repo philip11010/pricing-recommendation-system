@@ -12,8 +12,9 @@ whose inputs actually exist:
   why. Used for a new mentor, and flagged ``low_confidence`` because a price
   inferred from a form alone is a weaker claim than one informed by what the
   mentor has actually done.
-* **full**, those eight plus twenty-eight track-record inputs. Used once a
-  mentor has a record. Measurably more accurate: see the metrics in
+* **full**, those eight plus twenty-eight track-record inputs, and the
+  mentor's real tenure in place of the constant the core path uses. Used once
+  a mentor has a complete record. Measurably more accurate: see the metrics in
   ``model_info.json``.
 
 Both are loaded once at startup. They are a few megabytes each and loading per
@@ -28,6 +29,7 @@ request.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -38,7 +40,12 @@ import numpy as np
 import pandas as pd
 
 from src.config import PROJECT_ROOT
-from src.mentor.mapping import COLUMN_MAX_MENTEES, CURRENCY
+from src.mentor.mapping import (
+    COLUMN_MAX_MENTEES,
+    CURRENCY,
+    ModelColumnsMismatchError,
+    check_model_columns,
+)
 
 APP_ASSETS_DIR = PROJECT_ROOT / "app_assets"
 
@@ -55,6 +62,50 @@ ASSETS_MISSING_MESSAGE = (
 
 class AssetsUnavailableError(RuntimeError):
     """The prepared models or their metadata could not be loaded."""
+
+
+# Where the price a mentor charges today sits relative to the range the
+# system advises. Three words rather than a number, because that is the whole
+# of what the comparison supports: the range is a pair of residual quantiles,
+# so "19 per cent into the band" would read as a precision it does not have.
+POSITION_BELOW = "below"
+POSITION_WITHIN = "within"
+POSITION_ABOVE = "above"
+
+POSITIONS: tuple[str, ...] = (POSITION_BELOW, POSITION_WITHIN, POSITION_ABOVE)
+
+
+def position_vs_range(current_price: int, price_low: int, price_high: int) -> str:
+    """
+    Whether ``current_price`` falls below, within or above the advised range.
+
+    Both ends count as within. A mentor charging exactly the low end is
+    charging something the system advised, and telling them they are below it
+    would be wrong.
+    """
+    if current_price < price_low:
+        return POSITION_BELOW
+    if current_price > price_high:
+        return POSITION_ABOVE
+    return POSITION_WITHIN
+
+
+def difference_vs_current_percent(recommended_price: int, current_price: int) -> float:
+    """
+    How far the advice is from what the mentor charges, as a percentage of it.
+
+    Positive means the advice is higher than the current price. Expressed
+    against the current price rather than the advice because that is the
+    number the mentor is being asked to change: "20 per cent more than you
+    charge now" is the sentence this supports.
+
+    One decimal place. The prices either side of it are whole currency units
+    and the model behind them has an RMSE in the hundreds, so a second
+    decimal would be noise rendered as detail.
+    """
+    if current_price <= 0:
+        raise ValueError("a current price has to be a positive amount")
+    return round((recommended_price - current_price) / current_price * 100, 1)
 
 
 def per_mentee(session_price: int, max_mentees: int) -> int:
@@ -158,6 +209,10 @@ class PricingService:
         doing it here as well would put two spellings of each question in the
         codebase. Supplying ``history`` selects the full model and drops the
         low-confidence flag; leaving it out selects the core model.
+
+        A track record carries the tenure column as well as the twenty-eight
+        it adds, so merging it over the service row is what replaces the
+        new-mentor tenure constant with the mentor's own time on the platform.
         """
         model_used = CORE if history is None else FULL
         values = (
@@ -168,48 +223,78 @@ class PricingService:
                 **history,
             }
         )
-        frame = self._input_frame(model_used, values)
+        return self.predict_many([values], model_used)[0]
+
+    def predict_many(
+        self, rows: Sequence[dict[str, Any]], model_used: str
+    ) -> list[PriceRecommendation]:
+        """
+        Price many rows in one pass, through the same arithmetic as one.
+
+        :meth:`predict` is a call to this with a single row, rather than the
+        other way round. Anything that has to score a large number of rows,
+        such as the demonstration seed script choosing between candidates,
+        would otherwise either pay for one model call per row or carry its own
+        copy of the clipping and the range, and a second copy of that
+        arithmetic is a second answer waiting to disagree with this one.
+        """
+        if not rows:
+            return []
+        frame = self._input_frame(model_used, rows)
 
         # The models were trained against log1p(price), so the inverse comes
         # first and every number after it is a price.
-        predicted_log = float(self.pipelines[model_used].predict(frame)[0])
-        point = self.clip(float(np.expm1(predicted_log)))
-
-        band = self.ranges["models"][model_used]
-        low = self.clip(point * float(band["low_multiplier"]))
-        high = self.clip(point * float(band["high_multiplier"]))
-
-        session = (int(round(point)), int(round(low)), int(round(high)))
-        mentees = int(values[COLUMN_MAX_MENTEES])
-
-        return PriceRecommendation(
-            recommended_price=session[0],
-            price_low=session[1],
-            price_high=session[2],
-            price_per_mentee=per_mentee(session[0], mentees),
-            price_per_mentee_low=per_mentee(session[1], mentees),
-            price_per_mentee_high=per_mentee(session[2], mentees),
-            model_used=model_used,
-            low_confidence=model_used == CORE,
-            model_version=self.model_version,
+        predicted_log = np.asarray(
+            self.pipelines[model_used].predict(frame), dtype=float
         )
+        band = self.ranges["models"][model_used]
+        low_multiplier = float(band["low_multiplier"])
+        high_multiplier = float(band["high_multiplier"])
 
-    def _input_frame(self, model_used: str, values: dict[str, Any]) -> pd.DataFrame:
+        advice = []
+        for values, log_price in zip(rows, predicted_log, strict=True):
+            point = self.clip(float(np.expm1(log_price)))
+            session = (
+                int(round(point)),
+                int(round(self.clip(point * low_multiplier))),
+                int(round(self.clip(point * high_multiplier))),
+            )
+            mentees = int(values[COLUMN_MAX_MENTEES])
+            advice.append(
+                PriceRecommendation(
+                    recommended_price=session[0],
+                    price_low=session[1],
+                    price_high=session[2],
+                    price_per_mentee=per_mentee(session[0], mentees),
+                    price_per_mentee_low=per_mentee(session[1], mentees),
+                    price_per_mentee_high=per_mentee(session[2], mentees),
+                    model_used=model_used,
+                    low_confidence=model_used == CORE,
+                    model_version=self.model_version,
+                )
+            )
+        return advice
+
+    def _input_frame(
+        self, model_used: str, rows: Sequence[dict[str, Any]]
+    ) -> pd.DataFrame:
         """
-        One row, holding exactly the model's columns in the model's order.
+        The rows, holding exactly the model's columns in the model's order.
 
         Column order matters: the fitted ColumnTransformer selects by name but
         validates the frame it is handed, and a row assembled from a dict
         would otherwise arrive in insertion order.
         """
         columns = self.columns[model_used]
-        missing = [column for column in columns if column not in values]
+        missing = [column for column in columns if column not in rows[0]]
         if missing:
             raise ValueError(
                 f"the {model_used} model needs {len(columns)} inputs and "
                 f"{len(missing)} were not supplied"
             )
-        return pd.DataFrame([{column: values[column] for column in columns}])
+        return pd.DataFrame(
+            [{column: values[column] for column in columns} for values in rows]
+        )
 
 
 def _read_json(path: Path, what: str) -> dict[str, Any]:
@@ -225,10 +310,14 @@ def load_pricing_service(assets_dir: Path = APP_ASSETS_DIR) -> PricingService:
     """
     Load both pipelines and their metadata from ``assets_dir``.
 
-    The column list in ``model_info.json`` is checked against each fitted
-    pipeline. The two come from the same training run, so a disagreement means
-    the assets folder is a mix of two runs, which would otherwise show up as a
-    plausible but wrong price.
+    Two checks before anything is served. The column list in
+    ``model_info.json`` is checked against each fitted pipeline: the two come
+    from the same training run, so a disagreement means the assets folder is a
+    mix of two runs. Then both lists are checked against
+    :mod:`src.mentor.mapping`, which is what assembles the rows: a retrained
+    model that renames or reorders a column would otherwise be handed values
+    under the wrong headings and would answer with a plausible but wrong price
+    rather than an error.
     """
     model_info = _read_json(assets_dir / "model_info.json", "the model metadata")
     ranges = _read_json(assets_dir / "ranges.json", "the price ranges")
@@ -264,6 +353,15 @@ def load_pricing_service(assets_dir: Path = APP_ASSETS_DIR) -> PricingService:
             )
         pipelines[model_used] = pipeline
         columns[model_used] = declared
+
+    try:
+        check_model_columns(columns[CORE], columns[FULL])
+    except ModelColumnsMismatchError as error:
+        raise AssetsUnavailableError(
+            f"{error}; either rerun scripts/prepare_app_assets.py against the "
+            f"training run this application was written for, or update the "
+            f"column names in src/mentor/mapping.py to the retrained model's"
+        ) from error
 
     return PricingService(
         pipelines=pipelines, model_info=model_info, ranges=ranges, columns=columns
