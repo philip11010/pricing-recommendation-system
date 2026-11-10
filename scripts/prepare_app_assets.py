@@ -54,6 +54,13 @@ MODELS_OUT = APP_ASSETS / "models"
 RANGES_OUT = APP_ASSETS / "ranges.json"
 MODEL_INFO_OUT = APP_ASSETS / "model_info.json"
 
+# Not written here. scripts/build_comparables.py produces it, and it reads the
+# price fences out of model_info.json, so it has to run after this script.
+# Checked for and reported at the end rather than built, because the two are
+# independent: the API prices every service without it and simply cannot say
+# what other mentors charge.
+COMPARABLES = APP_ASSETS / "comparables.parquet"
+
 # The two served models. "core" is the new-mentor model, "full" adds the
 # history columns a returning mentor has accumulated.
 WINNING_ALGORITHM = "xgboost"
@@ -446,6 +453,20 @@ def main() -> int:
         print(f"  {path}  ({size:,} bytes)")
     print(f"  {relative(RANGES_OUT)}  ({ranges_bytes:,} bytes)")
     print(f"  {relative(MODEL_INFO_OUT)}  ({info_bytes:,} bytes)")
+    print()
+    if COMPARABLES.exists():
+        print(
+            f"Comparable mentors: {relative(COMPARABLES)} "
+            f"({COMPARABLES.stat().st_size:,} bytes). It was built against an "
+            f"earlier run of this script, so rebuild it to match this one:"
+        )
+    else:
+        print(
+            f"Comparable mentors: {relative(COMPARABLES)} is not there yet, so "
+            f"the API cannot say what mentors like a mentor charge. Build it "
+            f"with:"
+        )
+    print("  python scripts/build_comparables.py")
     print()
     print(f"Model results read from {relative(results_path)}")
     print(

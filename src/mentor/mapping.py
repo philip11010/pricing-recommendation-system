@@ -235,6 +235,23 @@ MIN_COMMITMENT_OPTIONS: tuple[int, ...] = (1, 2, 3, 5, 7)
 SERVICES_PLANNED_OPTIONS: tuple[int, ...] = (1, 2, 3, 4)
 SERVICES_CAP = 4
 
+# ---------------------------------------------------------------------------
+# A price the mentor sets themselves
+#
+# When a mentor changes the advice or rejects it and says what they charge
+# instead, that figure is theirs rather than the model's, so it is not held to
+# the model's fences. It is still bounded, because the box it is typed into is
+# the one place a typo becomes a stored price: a missing decimal point or an
+# extra zero would otherwise be recorded as what a mentor charges and then
+# shown back to them as fact.
+#
+# Whole units, like every other price in the system. The models round to whole
+# AUD before anything is shown, and a mentor's own price sitting beside them
+# with cents on it would imply a precision the comparison does not have.
+# ---------------------------------------------------------------------------
+FINAL_PRICE_MIN = 1
+FINAL_PRICE_MAX = 5_000
+
 # Time on the platform, for a mentor who has just joined. Not asked, because
 # there is only one honest answer to it: a new mentor has no history here,
 # however long their career has been. A mentor who does have a record is
@@ -541,6 +558,29 @@ def validate_education_level(value: Any) -> str:
             "options.",
         )
     return str(value)
+
+
+def validate_final_price(value: Any, *, field: str = "final_price") -> int:
+    """
+    A price the mentor set themselves, in whole currency units.
+
+    Booleans are rejected explicitly, as everywhere else a whole number is
+    read: ``True`` is an ``int`` equal to 1 in Python, so a checkbox posted
+    into this box would otherwise be stored as a one dollar session.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise MentorInputError(
+            field,
+            f"Enter the price you charge as a whole number of "
+            f"{CURRENCY}, between {FINAL_PRICE_MIN:,} and {FINAL_PRICE_MAX:,}.",
+        )
+    if not FINAL_PRICE_MIN <= value <= FINAL_PRICE_MAX:
+        raise MentorInputError(
+            field,
+            f"The price you charge has to be between {FINAL_PRICE_MIN:,} and "
+            f"{FINAL_PRICE_MAX:,} {CURRENCY}.",
+        )
+    return value
 
 
 def effective_services(services_count: int, services_planned: int) -> int:

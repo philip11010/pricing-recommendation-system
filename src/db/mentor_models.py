@@ -24,10 +24,10 @@ model:
     is stored so a price can be explained months later, after the mentor has
     edited the service and the live inputs no longer match.
 ``decisions``
-    What the mentor did about the advice. Separate from the recommendation on
-    purpose: the system advises and the mentor decides, and keeping the two
-    rows apart is what makes that separation auditable rather than merely
-    claimed.
+    What the mentor did about the advice: at most one row per recommendation,
+    which the database enforces. Separate from the recommendation on purpose:
+    the system advises and the mentor decides, and keeping the two rows apart
+    is what makes that separation auditable rather than merely claimed.
 
 Written against PostgreSQL, which is the deployment target, and run on SQLite
 locally. Nothing here is SQLite-specific: ``JSON`` is the portable type that
@@ -55,6 +55,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.models import Base, UtcDateTime, utcnow
 from src.mentor.mapping import (
+    FINAL_PRICE_MAX,
+    FINAL_PRICE_MIN,
     GROUP_FROM_MENTEES,
     HISTORY_STORED_FIELDS,
     LABEL_GROUP,
@@ -355,6 +357,17 @@ class PricingRecommendation(Base):
         order_by="PricingDecision.decided_at",
     )
 
+    @property
+    def decision(self) -> PricingDecision | None:
+        """
+        The mentor's answer to this recommendation, or None while it stands.
+
+        A list of at most one, which the database enforces. Exposed as a
+        single value because every caller wants "what did the mentor say" and
+        would otherwise reach for ``[0]`` and have to guard it.
+        """
+        return self.decisions[0] if self.decisions else None
+
     __table_args__ = (
         CheckConstraint(
             _in_clause("model_used", MODEL_CHOICES), name="ck_recommendation_model"
@@ -386,15 +399,25 @@ class PricingDecision(Base):
     __tablename__ = "decisions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Unique: a recommendation is answered once. The mentor can ask for a
+    # fresh price as often as they like, and each one is a new recommendation
+    # with its own decision, so a second decision on the same row would mean
+    # two different answers to one question with no way to tell which stands.
     recommendation_id: Mapped[int] = mapped_column(
         ForeignKey("recommendations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+        unique=True,
     )
     action: Mapped[str] = mapped_column(String(10), nullable=False)
-    # Null for "rejected": the mentor declined the advice and did not say what
-    # they will charge instead. Numeric rather than integer because a mentor
-    # typing their own price may well type cents.
+    # What the mentor settled on. Set for "accepted" and "modified", and
+    # optional for "rejected": a mentor who declines the advice may say what
+    # they charge instead, which is the most useful thing they could tell the
+    # system, or may simply decline and say nothing.
+    #
+    # Numeric rather than Integer because the earlier prototype wrote cents
+    # into this column and the type is not worth a rewrite. Everything written
+    # through the API is a whole number: see mapping.validate_final_price.
     final_price: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     decided_at: Mapped[datetime] = mapped_column(
         UtcDateTime, default=utcnow, nullable=False, index=True
@@ -412,10 +435,18 @@ class PricingDecision(Base):
         # "final_price > 0" against NULL evaluates to NULL, not FALSE, and a
         # CHECK constraint only rejects a row on FALSE, so the comparison
         # alone would let a price-less "modified" row through.
+        #
+        # A rejection is the one action that may go either way: with the
+        # mentor's own price, or with nothing. Both branches bound the price
+        # the same way, so there is no action for which an unbounded figure
+        # can be stored.
         CheckConstraint(
-            "(action IN ('accepted', 'modified') "
-            "   AND final_price IS NOT NULL AND final_price > 0) "
-            "OR (action = 'rejected' AND final_price IS NULL)",
+            f"(action IN ('accepted', 'modified') "
+            f"   AND final_price IS NOT NULL "
+            f"   AND final_price BETWEEN {FINAL_PRICE_MIN} AND {FINAL_PRICE_MAX}) "
+            f"OR (action = 'rejected' AND ("
+            f"   final_price IS NULL "
+            f"   OR final_price BETWEEN {FINAL_PRICE_MIN} AND {FINAL_PRICE_MAX}))",
             name="ck_decision_price_matches_action",
         ),
     )

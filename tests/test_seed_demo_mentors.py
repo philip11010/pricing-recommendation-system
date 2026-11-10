@@ -28,6 +28,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from scripts import seed_demo_mentors as seed
+from src.data import population as dataset
 from src.db import Base, Mentor, MentorHistory, Service, create_db_engine, get_session
 from src.mentor import mapping
 from src.mentor.dependencies import MENTOR_ID_HEADER
@@ -133,9 +134,9 @@ def test_the_population_is_the_one_the_models_were_fitted_within(population, pri
     it would demonstrate the system on input it does not support.
     """
     assert not population.empty
-    assert population[seed.TARGET_COLUMN].min() >= pricing.price_floor
-    assert population[seed.TARGET_COLUMN].max() <= pricing.price_ceiling
-    assert (population[seed.SCOPE_COLUMN] == seed.LONG_STAY_SCOPE).all()
+    assert population[dataset.TARGET_COLUMN].min() >= pricing.price_floor
+    assert population[dataset.TARGET_COLUMN].max() <= pricing.price_ceiling
+    assert (population[dataset.SCOPE_COLUMN] == dataset.LONG_STAY_SCOPE).all()
     assert (
         population[mapping.COLUMN_SESSION_FORMAT] == mapping.SESSION_FORMAT_VALUE
     ).all()
@@ -544,12 +545,16 @@ def test_one_seeded_mentor_cannot_read_anothers_service_or_price(
 # The inputs it cannot work without
 # ---------------------------------------------------------------------------
 def test_a_missing_dataset_fails_with_a_message_naming_it(monkeypatch, tmp_path):
-    monkeypatch.setattr(seed, "MASTER_DATASET", tmp_path / "absent.parquet")
+    """
+    The script reports the dataset it could not find as its own failure, not
+    as whatever the shared population module raised.
+    """
+    monkeypatch.setattr(dataset, "MASTER_DATASET", tmp_path / "absent.parquet")
 
     with pytest.raises(seed.SeedInputError) as error:
         seed.load_population()
 
-    assert "absent.parquet" in str(error.value)
+    assert "master_listings.parquet" in str(error.value)
     assert "git-ignored" in str(error.value)
 
 

@@ -39,10 +39,25 @@ make clean     # clear caches
 
 ## Running the pricing API
 
-Three steps, in order, and an optional fourth. The first two are only needed
-once.
+Five steps, in order. The first three build what the API loads, the fourth
+starts it, and the fifth is optional.
 
-### 1. Prepare the application assets
+The three build scripts go in this order, and the order matters:
+
+```bash
+python scripts/prepare_app_assets.py    # 1. the models and their metadata
+python scripts/build_comparables.py     # 2. the mentors a price is compared with
+python scripts/seed_demo_mentors.py     # 3. five mentors with a track record
+```
+
+Step 1 comes first because both of the others read the price fences out of the
+metadata it writes. Steps 2 and 3 are independent of each other, but they share
+one thing: the opaque key defined in `src/data/population.py`, which is a row's
+position in the processed dataset. A seeded mentor is excluded from their own
+comparison by that key, so the two have to be built from the same dataset. If
+you rebuild one after changing the dataset, rebuild the other.
+
+### 1. Prepare the models
 
 The API loads two trained models at startup. They are build outputs of a
 local training run rather than source, so they are not in the repository.
@@ -69,7 +84,38 @@ git-ignored and produced locally by `scripts/train_experiments.py`.
 
 Delete `app_assets/` and run the script again to rebuild.
 
-### 2. Create the database schema
+### 2. Build the comparable mentors
+
+A price with nothing to compare it against is a number a mentor has no way to
+judge. This step prepares the comparison:
+
+```bash
+python scripts/build_comparables.py
+```
+
+It writes `app_assets/comparables.parquet` (git-ignored) with one row per
+mentor in the modelled population and exactly eight columns: the opaque key,
+the field, the group size, the session price, the price per mentee, the overall
+rating, the booked share over the last year, and the review count. It prints
+the row count and price spread per field.
+
+Nothing that identifies a source record goes into the file. Seven of the eight
+columns are quantities a mentor would recognise about themselves, and the
+eighth is the key, which is a position in the processed dataset and says
+nothing without it. The dataset is git-ignored and never published.
+
+The population is the one the models were fitted within, read through the same
+module the seed script uses so the two agree about both the filters and the
+key. One filter differs: a row needs five reviews here rather than the ten the
+seed script asks for, because a row shown as one of two hundred comparable
+mentors needs less of a record than a row turned into a mentor with a track
+record of their own.
+
+The API starts without this file. `/health` reports
+`comparables_loaded: false`, everything else works, and the two endpoints that
+need it say what to run.
+
+### 3. Create the database schema
 
 `DATABASE_URL` is read from the environment and falls back to a local SQLite
 file. PostgreSQL is the deployment target, and the schema is versioned with
@@ -87,7 +133,7 @@ holds them under the old names cannot be upgraded in place. A local `app.db`
 from the prototype holds nothing but demo rows: delete it, or point
 `DATABASE_URL` at a fresh database, and the migration runs.
 
-### 3. Start the API
+### 4. Start the API
 
 ```bash
 uvicorn src.mentor.app:app --reload --port 8000
@@ -101,7 +147,7 @@ A server without prepared models still starts. `/health` reports
 form can render, and any endpoint that needs a price returns 503 with an
 explanation rather than failing.
 
-### 4. Seed the demonstration mentors (optional)
+### 5. Seed the demonstration mentors (optional)
 
 On a fresh database every mentor is a new mentor, because nobody has taken a
 session yet. The existing-mentor half of the system therefore has nobody on it
@@ -115,6 +161,18 @@ python scripts/seed_demo_mentors.py --reset    # remove them again
 It prints a table of what it wrote: the mentor, their field, their group size,
 what they charge today, the advised price and range, and whether what they
 charge is below, within or above that range.
+
+Each seeded mentor carries a `source_key`, the key described above, so they are
+left out of their own comparison. A mentor compared against themselves would be
+told their price is exactly typical, by a comparison they are a data point in.
+If you seeded mentors before the key was defined in
+`src/data/population.py`, reset and reseed so the keys match the comparables
+file:
+
+```bash
+python scripts/seed_demo_mentors.py --reset
+python scripts/seed_demo_mentors.py
+```
 
 The five are chosen from the population the models were fitted on, so each
 one's track record is internally consistent in the way a real one is: rating,
@@ -151,14 +209,18 @@ the name of whichever is missing. Both are git-ignored.
 
 | Method | Path                                     | Purpose                                           |
 | ------ | ---------------------------------------- | ------------------------------------------------- |
-| GET    | `/health`                                | Liveness, and whether a price can be produced     |
+| GET    | `/health`                                | Liveness, and what has been prepared              |
 | GET    | `/meta/options`                          | Every option list the registration form needs     |
 | POST   | `/mentors`                               | Register a mentor and first service, and price it |
 | GET    | `/mentors/demo`                          | The mentors seeded for the demonstration          |
 | GET    | `/mentors/{id}`                          | A mentor's own record                             |
+| GET    | `/mentors/{id}/dashboard`                | Advice, decisions and where the mentor sits       |
 | POST   | `/mentors/{id}/services`                 | Add another service, and price it                 |
 | POST   | `/services/{service_id}/recommendations` | Price one of the mentor's services again          |
+| GET    | `/services/{service_id}/comparables`     | What mentors like this one charge                 |
+| GET    | `/services/{service_id}/history`         | Every price this service has had, and its answer  |
 | GET    | `/recommendations/{id}`                  | Read back one advisory price                      |
+| POST   | `/recommendations/{id}/decision`         | Answer one advisory price                          |
 
 `/mentors/demo` is the one mentor-related endpoint that needs no identity
 header: it is the list someone picks an identity from, so requiring one would
@@ -178,6 +240,98 @@ the same validation and the same mapping. Adding a service moves the service
 count the model is given, so the price it returns is not necessarily the price
 the same answers would have had as a first service: see
 `mapping.effective_services`.
+
+### Comparable mentors
+
+`GET /services/{service_id}/comparables` answers "and what do mentors like me
+charge". It takes `sort` (`price` or `rating`), `order` (`asc` or `desc`),
+`limit` and `offset`, and returns three things:
+
+- `summary`: the count, the median price, the quartiles either side of it, the
+  median price per mentee, and how the match was made. Quantiles rather than a
+  mean, because prices in any field have a long upper tail and a mean sits
+  above most of the mentors it claims to describe.
+- `histogram`: twelve bins over the session price, as edges and counts, so the
+  frontend decides how the chart looks and the API decides only what it says.
+- `items`: the matched mentors themselves, sorted as asked.
+
+The match widens in steps and stops at the first level with at least
+`MIN_MATCHES` mentors, which is 10:
+
+| `match_level` | Who it covers                                         |
+| ------------- | ----------------------------------------------------- |
+| 0             | The mentor's own field, within one seat of their size |
+| 1             | Their field, any group size                            |
+| 2             | Any field, within one seat of their size              |
+
+`match_description` says the same thing in words, for example "Technology and
+software mentors with 3 to 5 mentees per session". `widened` is true when even
+level 2 found fewer than 10 mentors, so the figures describe fewer mentors than
+the system considers enough to generalise from. It is reported rather than
+hidden: a median over six mentors is still the best answer available, and the
+mentor is entitled to know that is what they are reading.
+
+The same endpoint serves a mentor who registered a minute ago and one who has
+been taking sessions for a year. The comparison is drawn from the field and the
+group size, which both of them have.
+
+A mentor seeded by `scripts/seed_demo_mentors.py` is left out of their own
+comparison. `summary` and `histogram` always describe the whole match, so
+paging through `items` never changes what the mentor is told about the market.
+
+`items` carry no id of any kind, and neither does the order they arrive in: the
+sort is settled by price, rating and price per mentee, never by the key.
+
+### Decisions
+
+`POST /recommendations/{id}/decision` takes `{action, final_price?}` and is the
+endpoint the whole system is advisory for. Up to it nothing has set a price.
+
+| `action`   | `final_price`                                                        |
+| ---------- | -------------------------------------------------------------------- |
+| `accepted` | Optional, and must equal the advised price if sent. Set to the advice |
+| `modified` | Required, and must differ from the advised price                     |
+| `rejected` | Optional: the mentor's own price, or none                            |
+
+A price the mentor sets themselves is a whole number between 1 and 5,000 AUD.
+Whatever they settle on becomes what the service charges, including a price
+named while rejecting the advice. A bare rejection leaves the service charging
+whatever it charged.
+
+A modification is stored as `modified` and never as `accepted`, however close
+to the advice it is: the share of advice that gets changed is the clearest
+evidence the system will ever have about its own usefulness. A modification
+equal to the advice is refused, with a message saying to accept it instead.
+
+A recommendation is answered once, and a second attempt returns 409. To decide
+again, ask for a fresh price and answer that one. The recommendation's `status`
+moves from `pending` to the action.
+
+`GET /services/{service_id}/history` returns every price the service has been
+given, newest first, each with its decision or null. Every figure in it was
+stored when the price was given, so it needs no models.
+
+### The dashboard
+
+`GET /mentors/{id}/dashboard` returns a mentor's own page in one request: per
+service, the field and session labels, the group size, what they charge, the
+latest advice, where their price sits against that range and among comparable
+mentors, their decisions counted by action, how far their decisions have sat
+from the advice on average, a timeline of advice against what they settled on,
+and the comparables summary. Then the same counts across every service.
+
+The timeline runs oldest first, the opposite of the history endpoint, because
+it is plotted against time and a chart that starts at the right hand end reads
+backwards.
+
+**Nothing in this API reports earnings or income.** There are no bookings in
+the system, so there is no volume to turn a price into a total, and a figure
+presented as income would be invented. The dashboard reports what the system
+knows: what the mentor charges, what was advised, how far apart those were, and
+where their price falls among comparable mentors.
+
+A server with no comparison table still answers. `comparables_available` says
+so, and the two fields that need it are null.
 
 Every advisory price comes back as two sets of three figures. The session
 total is `recommended_price` with `price_low` and `price_high` around it: one
@@ -300,12 +454,13 @@ so each directory corresponds to a documented system component.
 
 ```
 src/
-├── data/            Data acquisition and loading
+├── data/            Data acquisition, loading, and the modelled population
 ├── preprocessing/   Data Preprocessing component
 ├── models/          ML Model component
 ├── mentor/          Mentor-facing pricing API
 │   ├── mapping.py   The only translation between mentor terms and model inputs
 │   ├── prediction.py  Loads both models, produces a price and its range
+│   ├── comparables.py Who a price is compared against, and how they are found
 │   ├── schemas.py   Request and response shapes
 │   ├── dependencies.py  The identity hook that will become authentication
 │   └── app.py       The FastAPI application
@@ -354,6 +509,13 @@ dataset comes from:
 ```bash
 pytest -m "not dataset"       # skip them explicitly
 ```
+
+The comparable mentors are tested against a small synthetic table built in
+`tests/conftest.py` rather than the real file, so what those tests assert is a
+fact about the matching rules rather than about how many mentors happen to be
+in one field of one dataset. A handful of end-to-end checks do read the real
+file and skip with a message naming `scripts/build_comparables.py` when it has
+not been built.
 
 ---
 

@@ -21,7 +21,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.mentor import mapping
+from src.db.mentor_models import DECISION_ACTIONS
+from src.mentor import comparables, mapping
 
 # Deliberately permissive: enough to catch a missing "@" or a typed sentence,
 # without rejecting the legitimate addresses that a stricter pattern tends to.
@@ -79,14 +80,20 @@ class ServiceInput(StrictModel):
     def _check_field(cls, value: str) -> str:
         return mapping.validate_field(value)
 
-    @field_validator("max_mentees")
+    # Every numeric validator below runs in "before" mode, so the mapping
+    # rule sees what the frontend actually sent. Pydantic's default is to
+    # coerce first, which quietly turns true into 1 and "4" into 4, and both
+    # of those defeat a guard that exists for a reason: in Python True is an
+    # int equal to 1, so a checkbox posted into a number box would be stored
+    # as a group of one, or as a one dollar session.
+    @field_validator("max_mentees", mode="before")
     @classmethod
-    def _check_max_mentees(cls, value: int) -> int:
+    def _check_max_mentees(cls, value: object) -> int:
         return mapping.validate_max_mentees(value)
 
-    @field_validator("min_commitment")
+    @field_validator("min_commitment", mode="before")
     @classmethod
-    def _check_min_commitment(cls, value: int) -> int:
+    def _check_min_commitment(cls, value: object) -> int:
         return mapping.validate_min_commitment(value)
 
     @field_validator("skills")
@@ -144,9 +151,9 @@ class MentorRegistration(StrictModel):
     def _check_band(cls, value: str) -> str:
         return mapping.validate_years_mentoring(value)
 
-    @field_validator("services_planned")
+    @field_validator("services_planned", mode="before")
     @classmethod
-    def _check_services_planned(cls, value: int) -> int:
+    def _check_services_planned(cls, value: object) -> int:
         return mapping.validate_services_planned(value)
 
     @field_validator("education_level")
@@ -374,15 +381,28 @@ class ServiceCreatedOut(BaseModel):
 
 
 class HealthOut(BaseModel):
-    """Liveness, plus whether a price can actually be produced."""
+    """
+    Liveness, plus whether a price can actually be produced.
+
+    The two build outputs are reported separately because they are
+    independent. A server with models and no comparison table prices every
+    service perfectly well and simply cannot say what other mentors charge.
+    """
 
     status: str = Field(examples=["ok"])
     models_loaded: bool
+    comparables_loaded: bool = Field(
+        default=False,
+        description=(
+            "Whether the table of comparable mentors was prepared on this " "server."
+        ),
+    )
     model_version: str | None
     trained_at: str | None
     currency: str = mapping.CURRENCY
     detail: str | None = Field(
-        default=None, description="Why the models are unavailable, when they are."
+        default=None,
+        description="What is unavailable and how to prepare it, when something is.",
     )
 
 
@@ -417,3 +437,326 @@ class OptionsOut(BaseModel):
     years_mentoring_bands: list[dict[str, Any]]
     services_planned: list[dict[str, Any]]
     education_levels: list[dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# Comparable mentors
+# ---------------------------------------------------------------------------
+class ComparableItemOut(BaseModel):
+    """
+    One mentor a price is compared against.
+
+    No id of any kind. A mentor looking at who they are compared with is
+    looking at a distribution, not at other people's accounts, and every
+    figure here is one a mentor would recognise about themselves.
+    """
+
+    field_label: str = Field(examples=["Technology and software"])
+    session_label: str = Field(examples=["Group"])
+    max_mentees: int
+    price: int = Field(description="What this mentor charges for one session.")
+    price_per_mentee: int = Field(description="That price divided by the seats.")
+    rating_overall: float = Field(description="Their overall rating, out of 5.")
+    booked_share_percent: float = Field(
+        description=("The percentage of their offered time booked over the last year."),
+        examples=[42.5],
+    )
+    reviews_total: int
+
+
+class ComparablesSummaryOut(BaseModel):
+    """
+    The headline figures for one set of comparable mentors.
+
+    Quantiles rather than a mean: prices in any field have a long upper tail,
+    and a mean sits above most of the mentors it claims to describe. Every
+    price is null when there are no comparable mentors at all, rather than
+    zero, which would read as mentors charging nothing.
+    """
+
+    count: int
+    median_price: int | None
+    p25_price: int | None
+    p75_price: int | None
+    median_price_per_mentee: int | None
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    match_level: int = Field(
+        description=(
+            "How widely the system had to look. 0 is the mentor's own field "
+            "at about their group size, 1 is their field at any group size, "
+            "and 2 is any field at about their group size."
+        ),
+        examples=[0],
+    )
+    widened: bool = Field(
+        description=(
+            "True when even the widest match found fewer than the minimum "
+            "number of comparable mentors, so the figures above describe "
+            "fewer mentors than the system considers enough to generalise "
+            "from."
+        )
+    )
+    match_description: str = Field(
+        description="Who the comparison covers, in words.",
+        examples=["Technology and software mentors with 3 to 5 mentees per session"],
+    )
+
+
+class PriceHistogramOut(BaseModel):
+    """
+    The spread of session prices among the comparable mentors.
+
+    Edges and counts rather than a drawn chart, so the frontend decides how it
+    looks and the API decides only what it says. Both lists are empty when
+    there is nothing to bin.
+    """
+
+    bin_edges: list[float] = Field(
+        description="One more edge than there are counts.", examples=[[200.0, 250.0]]
+    )
+    counts: list[int]
+
+
+class ComparablesOut(BaseModel):
+    """What mentors like this one charge: the summary, the spread, the rows."""
+
+    summary: ComparablesSummaryOut
+    histogram: PriceHistogramOut
+    items: list[ComparableItemOut]
+    limit: int
+    offset: int
+
+
+# ---------------------------------------------------------------------------
+# Decisions
+# ---------------------------------------------------------------------------
+class DecisionInput(StrictModel):
+    """
+    What the mentor did about one advisory price.
+
+    ``final_price`` means different things per action, and the endpoint is
+    where those rules live, because two of the three need the recommendation
+    to check against:
+
+    * **accepted**: the mentor takes the advice, so the final price is the
+      recommended price. Sending it is optional and sending a different
+      number is refused rather than quietly recorded as acceptance of
+      something else.
+    * **modified**: the mentor charges something else, so the price is
+      required and has to differ from the advice. A "modification" equal to
+      the advice is an acceptance, and storing it as a modification would
+      misreport what the mentor did.
+    * **rejected**: the price is optional. A mentor who declines the advice
+      may say what they charge instead, which is the most useful thing they
+      could tell the system, or may simply decline.
+    """
+
+    action: str = Field(
+        description='One of "accepted", "modified" or "rejected".',
+        examples=["accepted"],
+    )
+    final_price: int | None = Field(
+        default=None,
+        description=(
+            f"The price the mentor settled on, in whole {mapping.CURRENCY}, "
+            f"between {mapping.FINAL_PRICE_MIN} and {mapping.FINAL_PRICE_MAX}."
+        ),
+        examples=[320],
+    )
+
+    @field_validator("action")
+    @classmethod
+    def _check_action(cls, value: str) -> str:
+        if value not in DECISION_ACTIONS:
+            allowed = ", ".join(DECISION_ACTIONS)
+            raise ValueError(
+                f"Say what you decided about the price. The options are {allowed}."
+            )
+        return value
+
+    # "before" mode, for the reason given on ServiceInput.max_mentees. This
+    # is the field where it matters most: the box a mentor types their own
+    # price into is the one place a stray value becomes a stored price and is
+    # then shown back to them as what they charge.
+    @field_validator("final_price", mode="before")
+    @classmethod
+    def _check_final_price(cls, value: object) -> int | None:
+        if value is None:
+            return None
+        return mapping.validate_final_price(value)
+
+
+class DecisionOut(BaseModel):
+    """One answer a mentor gave, as it is read back."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    recommendation_id: int
+    action: str = Field(examples=["accepted"])
+    final_price: int | None = Field(
+        default=None,
+        description=(
+            "The price the mentor settled on, or null for a rejection that "
+            "named no price of its own."
+        ),
+    )
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    decided_at: datetime
+
+
+class RecommendationHistoryOut(BaseModel):
+    """
+    One advisory price and what the mentor did about it.
+
+    ``decision`` is null while the recommendation still stands, which is what
+    ``status: "pending"`` on the price itself says as well. Both are reported:
+    the status is on the price because that is where it is stored, and the
+    decision is here because that is where its figures are.
+    """
+
+    recommendation: RecommendationOut
+    decision: DecisionOut | None
+
+
+class ServiceHistoryOut(BaseModel):
+    """
+    Every price one service has been given, newest first.
+
+    Newest first because the current question is almost always "what was I
+    last told", and the older rows are the record of whether the advice has
+    been any good.
+    """
+
+    service_id: int
+    count: int
+    items: list[RecommendationHistoryOut]
+
+
+# ---------------------------------------------------------------------------
+# The dashboard
+# ---------------------------------------------------------------------------
+class DecisionCountsOut(BaseModel):
+    """
+    How a mentor has answered the advice so far, counted by action.
+
+    ``pending`` is one of the four because it is the honest fourth case: a
+    recommendation nobody has answered is not a rejection, and folding it into
+    one would overstate how often the advice is turned down.
+    """
+
+    accepted: int = 0
+    modified: int = 0
+    rejected: int = 0
+    pending: int = 0
+
+
+class TimelinePointOut(BaseModel):
+    """One price, and what the mentor settled on, at one point in time."""
+
+    generated_at: datetime
+    recommended_price: int
+    final_price: int | None
+    action: str | None = Field(
+        default=None,
+        description="Null while the recommendation has not been answered.",
+        examples=["accepted"],
+    )
+
+
+class DashboardServiceOut(BaseModel):
+    """
+    One service, with everything the mentor's own page shows about it.
+
+    No earnings and no income. The system has no bookings to count and would
+    have to invent a volume to turn a price into a total, so it reports what
+    it actually knows: what the mentor charges, what was advised, where that
+    sits among comparable mentors, and what the mentor decided.
+    """
+
+    service_id: int
+    field_label: str = Field(examples=["Technology and software"])
+    session_label: str = Field(examples=["One to one"])
+    max_mentees: int
+    current_price: int | None
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    latest_recommendation: RecommendationOut | None
+    position_vs_range: str | None = Field(
+        default=None,
+        description=(
+            "Where the current price sits against the latest advised range: "
+            '"below", "within" or "above".'
+        ),
+    )
+    price_percentile: float | None = Field(
+        default=None,
+        description=(
+            "The percentage of comparable mentors charging the current price "
+            "or less. Null when there is no current price or no comparable "
+            "mentors to place it among."
+        ),
+        examples=[62.5],
+    )
+    decision_counts: DecisionCountsOut
+    average_difference_percent: float | None = Field(
+        default=None,
+        description=(
+            "On average, how far the price the mentor settled on sat from the "
+            "price advised, as a percentage of the advice. Positive means "
+            "they charged more than advised. Null until they have answered "
+            "at least one recommendation with a price."
+        ),
+        examples=[-4.2],
+    )
+    timeline: list[TimelinePointOut]
+    comparables: ComparablesSummaryOut | None = Field(
+        default=None,
+        description=(
+            "The comparable mentors for this service, or null when the "
+            "comparison table is not available on this server."
+        ),
+    )
+
+
+class DashboardTotalsOut(BaseModel):
+    """
+    The mentor's own figures across every service they offer.
+
+    Counts and percentages only, for the same reason as above: there is no
+    volume in the system, so there is no honest total in currency to report.
+    """
+
+    services: int
+    services_with_a_price: int
+    recommendations: int
+    decision_counts: DecisionCountsOut
+    average_difference_percent: float | None = Field(
+        default=None,
+        description=(
+            "The same average as on a service, across every service the "
+            "mentor offers."
+        ),
+    )
+
+
+class DashboardOut(BaseModel):
+    """A mentor's own page: one block per service, plus their own totals."""
+
+    mentor_id: int
+    display_name: str
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    comparables_available: bool = Field(
+        description=(
+            "False when the comparison table was never prepared on this "
+            "server, which is why the comparables and percentile fields are "
+            "null."
+        )
+    )
+    totals: DashboardTotalsOut
+    services: list[DashboardServiceOut]
+
+
+# Values the comparables endpoint accepts, published so the frontend can
+# render the controls from the API rather than from its own copies.
+SORT_FIELDS: tuple[str, ...] = comparables.SORT_FIELDS
+ORDERS: tuple[str, ...] = comparables.ORDERS

@@ -340,16 +340,82 @@ def test_a_rejection_records_no_price(db_session, stored):
     assert db_session.scalar(select(PricingDecision)).final_price is None
 
 
-def test_a_rejection_carrying_a_price_is_refused(db_session, stored):
+def test_a_rejection_may_carry_the_mentors_own_price(db_session, stored):
+    """
+    A mentor who declines the advice may say what they charge instead, which
+    is the most useful thing they could tell the system. The table used to
+    refuse it, which threw that away.
+    """
     _, _, recommendation = stored
     db_session.add(
         PricingDecision(
             recommendation_id=recommendation.id, action="rejected", final_price=195.0
         )
     )
+    db_session.commit()
+
+    decision = db_session.scalar(select(PricingDecision))
+    assert decision.action == "rejected"
+    assert float(decision.final_price) == pytest.approx(195.0)
+
+
+@pytest.mark.parametrize("action", ["accepted", "modified", "rejected"])
+@pytest.mark.parametrize("price", [0, -10, mapping.FINAL_PRICE_MAX + 1])
+def test_a_price_outside_the_bounds_is_refused_for_every_action(
+    db_session, stored, action, price
+):
+    """
+    The box a mentor types their own price into is the one place a typo
+    becomes a stored price, so no action lets an unbounded figure through.
+    """
+    _, _, recommendation = stored
+    db_session.add(
+        PricingDecision(
+            recommendation_id=recommendation.id, action=action, final_price=price
+        )
+    )
 
     with pytest.raises(IntegrityError):
         db_session.commit()
+
+
+def test_a_recommendation_can_only_be_answered_once(db_session, stored):
+    """
+    Two answers to one question would leave no way to tell which stands. The
+    mentor asks for a fresh price and answers that one instead.
+    """
+    _, _, recommendation = stored
+    db_session.add(
+        PricingDecision(
+            recommendation_id=recommendation.id, action="accepted", final_price=180
+        )
+    )
+    db_session.commit()
+
+    db_session.add(
+        PricingDecision(
+            recommendation_id=recommendation.id, action="rejected", final_price=None
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_a_recommendation_reports_its_one_decision(db_session, stored):
+    _, _, recommendation = stored
+    assert recommendation.decision is None
+
+    db_session.add(
+        PricingDecision(
+            recommendation_id=recommendation.id, action="modified", final_price=210
+        )
+    )
+    db_session.commit()
+    db_session.refresh(recommendation)
+
+    assert recommendation.decision is not None
+    assert recommendation.decision.action == "modified"
 
 
 @pytest.mark.parametrize("action", ["accepted", "modified"])

@@ -306,6 +306,26 @@ def _read_json(path: Path, what: str) -> dict[str, Any]:
         raise AssetsUnavailableError(f"{what} is not readable JSON: {path}") from error
 
 
+def read_price_fences(assets_dir: Path = APP_ASSETS_DIR) -> tuple[float, float]:
+    """
+    The price fences the models were trained within, without loading them.
+
+    A build script that only needs to know the range the models can be
+    trusted over should not pay for two gradient-boosted pipelines to find
+    out. Reading the metadata keeps the fences single-sourced either way: the
+    number in the file is the number the application clips to.
+    """
+    model_info = _read_json(assets_dir / "model_info.json", "the model metadata")
+    try:
+        fences = model_info["price_fences"]
+        return float(fences["lower"]), float(fences["upper"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise AssetsUnavailableError(
+            f"the model metadata does not record the price fences: "
+            f"{assets_dir / 'model_info.json'}"
+        ) from error
+
+
 def load_pricing_service(assets_dir: Path = APP_ASSETS_DIR) -> PricingService:
     """
     Load both pipelines and their metadata from ``assets_dir``.

@@ -59,6 +59,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.data.population import (  # noqa: E402
+    KEY_COLUMN,
+    TARGET_COLUMN,
+    PopulationError,
+    modelled_population,
+)
 from src.db import Mentor, MentorHistory, Service, create_db_engine  # noqa: E402
 from src.mentor import mapping  # noqa: E402
 from src.mentor.prediction import (  # noqa: E402
@@ -72,8 +78,6 @@ from src.mentor.prediction import (  # noqa: E402
     position_vs_range,
 )
 
-MASTER_DATASET = PROJECT_ROOT / "data" / "processed" / "master_listings.parquet"
-
 # Everything here is deterministic, and this is the one number that decides
 # the parts of it that are arbitrary: which candidate is taken when several
 # would do, which fictional name goes with which record, and which skills a
@@ -85,19 +89,16 @@ DEMO_MENTORS = 5
 # ---------------------------------------------------------------------------
 # The population
 #
-# The same filters the models were trained and scored on. A record outside
-# them is one the models were never fitted to price, so seeding a mentor from
-# it would demonstrate the system on input it does not support.
+# The filters, and the opaque key, live in src.data.population, because
+# scripts/build_comparables.py has to agree with this script about both. A key
+# that meant one thing here and another there would compare a seeded mentor
+# against themselves.
 #
-# The two dataset columns named here are not model inputs: one is the target
-# and one is the scope flag that the training run split on. Every column that
-# *is* a model input is referred to through src.mentor.mapping, which is the
-# only module that knows those names.
+# One filter is set here rather than shared: how much of a record a row needs.
+# A row turned into a mentor with a full track record needs more than a row
+# shown as one of two hundred comparable mentors, so this asks for ten reviews
+# where the comparables build asks for five.
 # ---------------------------------------------------------------------------
-TARGET_COLUMN = "price_num"
-SCOPE_COLUMN = "long_stay"
-LONG_STAY_SCOPE = False
-
 MIN_REVIEWS = 10
 
 # ---------------------------------------------------------------------------
@@ -305,20 +306,6 @@ class SeedInputError(RuntimeError):
     """An input this script cannot work without is absent or unusable."""
 
 
-def relative(path: Path) -> str:
-    """
-    ``path`` relative to the project root, with forward slashes.
-
-    Falls back to the path as given when it is somewhere else entirely, so a
-    message about a file is never replaced by a message about a path
-    calculation.
-    """
-    try:
-        return str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
-    except ValueError:
-        return str(path)
-
-
 @dataclass(frozen=True)
 class Candidate:
     """
@@ -357,36 +344,20 @@ class Candidate:
 # ---------------------------------------------------------------------------
 def load_population() -> pd.DataFrame:
     """
-    The rows the models were fitted to price, in a stable order.
+    The rows that could become a demonstration mentor, each carrying its key.
 
     Deterministic because the dataset is a file: the same file filtered the
-    same way gives the same rows in the same order, which is what makes the
-    positional index usable as ``source_key``.
+    same way gives the same rows with the same keys, which is what lets a
+    rerun recognise the mentors it already wrote.
     """
-    if not MASTER_DATASET.exists():
-        raise SeedInputError(
-            f"missing the processed dataset: {relative(MASTER_DATASET)}\n"
-            f"  it is git-ignored and built locally; see the README section on "
-            f"preparing application assets"
+    try:
+        population = modelled_population(
+            price_floor=price_fence_bounds()[0],
+            price_ceiling=price_fence_bounds()[1],
+            min_reviews=MIN_REVIEWS,
         )
-    master = pd.read_parquet(MASTER_DATASET, engine="pyarrow")
-
-    keep = (
-        (master[SCOPE_COLUMN] == LONG_STAY_SCOPE)
-        & master[TARGET_COLUMN].between(*price_fence_bounds())
-        & (master[mapping.COLUMN_SESSION_FORMAT] == mapping.SESSION_FORMAT_VALUE)
-        & master[mapping.COLUMN_MAX_MENTEES].between(
-            mapping.MAX_MENTEES_MIN, mapping.MAX_MENTEES_MAX
-        )
-        & (master[mapping.HISTORY_FIELDS["has_booking_data"]] == 1)
-        & (master[mapping.HISTORY_FIELDS["reviews_total"]] >= MIN_REVIEWS)
-        # Only the twelve market segments the field list is bound to, since a
-        # mentor has to be described as working in one of the twelve fields.
-        & master[mapping.COLUMN_FIELD].isin(
-            [spec["column_value"] for spec in mapping.FIELDS.values()]
-        )
-    )
-    population = master.loc[keep]
+    except PopulationError as error:
+        raise SeedInputError(str(error)) from error
 
     # A track record is stored complete or not at all: a row with a gap in it
     # would be written as a partial record, which is priced by the core model
@@ -394,8 +365,8 @@ def load_population() -> pd.DataFrame:
     population = population.dropna(subset=list(mapping.FULL_COLUMNS))
     if population.empty:
         raise SeedInputError(
-            "no row of the dataset passes the filters the models were fitted "
-            "within, so there is nothing to seed from"
+            "every row of the population is missing part of a track record, "
+            "so there is nothing to seed from"
         )
     return population.reset_index(drop=True)
 
@@ -508,7 +479,9 @@ def build_candidates(population: pd.DataFrame) -> list[Candidate]:
     the alternative is thousands of single-row model calls to arrive at the
     same numbers.
     """
-    described = [mentor_terms(key, row) for key, row in population.iterrows()]
+    described = [
+        mentor_terms(int(row[KEY_COLUMN]), row) for _, row in population.iterrows()
+    ]
     advice = pricing_service().predict_many(
         [model_row(terms) for terms in described], FULL
     )

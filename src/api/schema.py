@@ -174,7 +174,7 @@ class FieldSpec:
     @property
     def range_hint(self) -> str:
         """
-        The accepted range, as "1 to 16", or "" when there is no bound.
+        The accepted range, as "1 to 8", or "" when there is no bound.
 
         Shown beside the control rather than only as a placeholder, because a
         placeholder disappears as soon as the field has a value, which is
