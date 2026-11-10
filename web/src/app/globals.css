@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-shell text-ink antialiased;
+    font-feature-settings: "cv05" 1;
+  }
+
+  /*
+   * One visible focus style for everything. The default ring is removed by
+   * Tailwind's reset in places, and a keyboard user who cannot see where they
+   * are cannot use the form at all.
+   */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-600 ring-offset-2 ring-offset-white;
+  }
+
+  /* Numbers line up in columns, which is what a price table is for. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /* Read by a screen reader, never drawn. Used for chart summaries. */
+  .sr-only-focusable:focus {
+    @apply not-sr-only fixed left-4 top-4 z-50 rounded-lg bg-white px-4 py-2 shadow-card;
+  }
+}
+
+/*
+ * Respect the system setting. Recharts animates by default and the stepper
+ * and panels transition, and for some people that is not a nicety.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
