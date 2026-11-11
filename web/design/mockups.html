@@ -1,0 +1,608 @@
+<title>Pathwise Mockups</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@800&family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@1,500&display=swap">
+<style>
+/* Layout: one hash-routed mock. Bold screens (home, login, price) use a full-bleed indigo gradient; calm screens use white with a slim gradient banner. */
+:root{
+  --ink-900:#0B0B0F; --ink-700:#3F3F4A; --ink-500:#55555F;
+  --surface:#fff; --sunk:#F7F7F9; --line:#E4E4E9; --line-strong:#C9C9D2;
+  --accent:#4338CA; --accent-dark:#312E81; --accent-tint:#EEF2FF;
+  --link:#0F766E; --link-dark:#115E59;
+  --tint-a:#E0E7FF; --tint-b:#DBEAFE; --tint-c:#EDE9FE; --tint-d:#CFFAFE;
+  --ok:#16704F; --ok-fill:#EDF7F2; --caution:#8A5207; --caution-fill:#FFF8E8; --danger:#B3261E;
+  --band:#BAE6FD; --band-edge:#0369A1;
+  --f-display:"Inter Tight","Inter",system-ui,sans-serif; --f-sans:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --f-accent:"Playfair Display",Georgia,serif;
+  --ease:cubic-bezier(0.25,0.46,0.45,0.94);
+  --hero-grad:radial-gradient(45% 55% at 100% 100%,rgba(217,70,166,.75),transparent 70%),radial-gradient(45% 60% at 80% 55%,rgba(6,182,212,.7),transparent 70%),radial-gradient(50% 60% at 45% 115%,rgba(124,58,237,.9),transparent 70%),linear-gradient(135deg,#1E1B8F 0%,#4338CA 50%,#2563EB 100%);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--ink-900);font:400 16px/1.55 var(--f-sans);padding-bottom:84px;overflow-x:hidden}
+a{color:inherit}
+.in{max-width:1152px;margin-inline:auto;padding-inline:max(16px,env(safe-area-inset-left,0px)) max(16px,env(safe-area-inset-right,0px))}
+.in.narrow{max-width:1024px}
+:focus-visible{outline:none;box-shadow:0 0 0 2px #fff,0 0 0 4px var(--accent);border-radius:12px}
+.dark :focus-visible{box-shadow:0 0 0 2px #1E1B8F,0 0 0 4px #fff}
+h1,h2,h3{margin:0}
+.display-xl{font:800 clamp(2.5rem,7vw,4.5rem)/1.02 var(--f-display);letter-spacing:-.03em;text-wrap:balance}
+.display{font:800 clamp(2rem,6vw,3.25rem)/1.08 var(--f-display);letter-spacing:-.025em;text-wrap:balance}
+.display em,.display-xl em{font:italic 500 1.06em/1 var(--f-accent);letter-spacing:-.01em}
+.h2{font:700 clamp(1.375rem,3vw,1.75rem)/1.2 var(--f-sans);letter-spacing:-.015em}
+.h3{font:600 1.125rem/1.3 var(--f-sans)}
+.small{font-size:.875rem;color:var(--ink-500)}
+.overline{font:700 .75rem/1.3 var(--f-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-500)}
+.lead{font-size:1.125rem;line-height:1.6;max-width:46ch}
+.num{font-variant-numeric:tabular-nums}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:11px 24px;border-radius:9999px;font:600 1rem/1 var(--f-sans);text-decoration:none;cursor:pointer;border:2px solid var(--ink-900);background:transparent;color:var(--ink-900);transition:background-color 180ms var(--ease),border-color 180ms var(--ease),color 180ms var(--ease)}
+.btn:hover{background:var(--ink-900);color:#fff}
+.btn.solid{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.solid:hover{background:var(--accent-dark);border-color:var(--accent-dark)}
+.btn.quiet{border:1px solid var(--line);color:var(--ink-700)}
+.btn.quiet:hover{background:var(--sunk);border-color:var(--line-strong);color:var(--ink-700)}
+.btn.sm{min-height:40px;padding:8px 18px;font-size:.9375rem}
+.btn.wide{width:100%}
+.on-dark .btn{border-color:#fff;color:#fff}
+.on-dark .btn:hover{background:#fff;color:var(--accent-dark)}
+.on-dark .btn.white{background:#fff;color:var(--accent-dark)}
+.on-dark .btn.white:hover{background:var(--tint-a);border-color:var(--tint-a)}
+.on-dark .card .btn{border-color:var(--ink-900);color:var(--ink-900)}
+.on-dark .card .btn:hover{background:var(--ink-900);color:#fff}
+.on-dark .card .btn.solid{background:var(--accent);border-color:var(--accent);color:#fff}
+.on-dark .card .btn.solid:hover{background:var(--accent-dark);border-color:var(--accent-dark)}
+.on-dark .card .btn.quiet{border:1px solid var(--line);color:var(--ink-700)}
+.on-dark .card .btn.quiet:hover{background:var(--sunk);border-color:var(--line-strong);color:var(--ink-700)}
+.on-dark .card :focus-visible{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--accent)}
+.textlink{font-weight:600;color:var(--link);text-underline-offset:3px}
+.textlink:hover{color:var(--link-dark)}
+.on-dark .textlink{color:#fff}
+
+/* header */
+#hdr{position:relative;z-index:5}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-block:18px}
+.brand{font:800 1.5rem/1 var(--f-display);letter-spacing:-.03em;text-decoration:none;display:flex;align-items:center;gap:10px}
+.mark{width:28px;height:28px;flex:none}
+.nav{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.nav .lnk{font-weight:500;text-decoration:none;padding:10px 12px;min-height:40px;display:inline-flex;align-items:center;border-radius:9999px}
+.nav .lnk:hover{background:rgba(127,127,160,.14)}
+.nav .lnk[aria-current="page"]{font-weight:700;color:var(--accent)}
+.hdr-dark{background:#1E1B8F;color:#fff}
+.hdr-dark .nav .lnk{color:#fff}
+.hdr-light{border-bottom:1px solid var(--line);background:#fff}
+.hdr-light .nav .lnk{color:var(--ink-700)}
+.avatar{width:36px;height:36px;border-radius:50%;background:var(--tint-c);color:var(--accent-dark);font:700 .8125rem/36px var(--f-sans);text-align:center;flex:none}
+
+/* gradient bands */
+.hero{background:var(--hero-grad);color:#fff}
+.hero-wrap{margin-top:-1px}
+.banner{background:linear-gradient(120deg,#1E1B8F,#4338CA 60%,#2563EB);color:#fff}
+.banner .in{padding-block:36px 40px}
+.banner p{margin:8px 0 0;max-width:56ch;color:#E0E7FF}
+
+/* hero layout */
+.hgrid{display:grid;grid-template-columns:1.1fr .9fr;gap:48px;align-items:center;padding-block:48px 80px}
+.hgrid .display-xl{max-width:12ch}
+.hgrid .lead{margin:24px 0 0;color:#E0E7FF}
+.cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:32px}
+.fine{margin:20px 0 0;font-size:.875rem;color:#C7D2FE}
+
+/* cards */
+.card{background:#fff;border-radius:20px;padding:32px;color:var(--ink-900);box-shadow:0 1px 2px rgba(11,11,15,.04),0 8px 24px -12px rgba(11,11,15,.18)}
+.flat{background:#fff;border:1px solid var(--line);border-radius:20px;padding:24px;min-width:0}
+.figure{font:800 clamp(2.5rem,9vw,4rem)/1 var(--f-display);letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:10px 0 6px}
+.figure small{font:600 1rem/1 var(--f-sans);letter-spacing:0;color:var(--ink-500);margin-left:8px}
+.range{color:var(--ink-700);font-weight:500}
+.sentence{margin:16px 0 0;color:var(--ink-700)}
+.note{margin:16px 0 0;padding:12px 14px;border-radius:12px;background:var(--caution-fill);color:var(--caution);font-size:.875rem;line-height:1.5}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
+.actions .btn{flex:1 1 auto}
+.ladder{margin-top:22px}
+.ladder .track{position:relative;height:12px;border-radius:6px;background:#F1F1F4}
+.ladder .band{position:absolute;left:26%;width:44%;top:0;bottom:0;background:var(--band);border-left:2px solid var(--band-edge);border-right:2px solid var(--band-edge)}
+.ladder .tri{position:absolute;left:45%;top:-9px;border-left:8px solid transparent;border-right:8px solid transparent;border-top:12px solid var(--accent);transform:translateX(-8px)}
+.ladder .cur{position:absolute;left:52%;top:-3px;width:16px;height:16px;border:2px solid var(--ink-900);border-radius:50%;background:#fff;transform:translateX(-8px)}
+.ladder .ends{display:flex;justify-content:space-between;margin-top:8px;font-size:.8125rem;color:var(--ink-500)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:12px;font-size:.8125rem;color:var(--ink-700)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw-tri{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:9px solid var(--accent)}
+.sw-cir{width:12px;height:12px;border:2px solid var(--ink-900);border-radius:50%}
+.sw-band{width:18px;height:10px;background:var(--band);border-left:2px solid var(--band-edge);border-right:2px solid var(--band-edge)}
+
+/* sections */
+.sec{padding-block:56px}
+.sec.tight{padding-block:40px}
+.grid{display:grid;gap:24px}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:1fr 1fr}
+.g4{grid-template-columns:repeat(4,1fr)}
+.step{border-radius:20px;padding:24px;min-width:0}
+.step:nth-child(1){background:var(--tint-a)}.step:nth-child(2){background:var(--tint-b)}.step:nth-child(3){background:var(--tint-c)}
+.step h3{margin:8px 0}.step p{margin:0;color:var(--ink-700);max-width:34ch}
+.soft{position:relative;overflow:hidden}
+.soft::before,.soft::after{content:"";position:absolute;width:420px;height:420px;border-radius:50%;filter:blur(110px);opacity:.28;pointer-events:none}
+.soft::before{left:-160px;top:-60px;background:#2563EB}
+.soft::after{right:-160px;bottom:-120px;background:#7C3AED}
+.soft>.in{position:relative}
+.close{border-radius:28px;color:#fff;background:linear-gradient(120deg,#312E81,#4338CA 55%,#1D4ED8);padding:56px 32px}
+.close .display{max-width:18ch}
+
+/* mentor card */
+.mcard{display:flex;flex-direction:column;gap:12px;min-width:0}
+.mhead{display:flex;gap:12px;align-items:center}
+.mav{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;font:700 1rem/1 var(--f-sans);color:var(--accent-dark);flex:none}
+.mname{font-weight:700;line-height:1.25}
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:9999px;padding:4px 12px;font:600 .8125rem/1.4 var(--f-sans);background:var(--sunk);color:var(--ink-700)}
+.chip.ok{background:var(--ok-fill);color:var(--ok)}
+.chip.new{background:var(--caution-fill);color:var(--caution)}
+.chip svg{width:16px;height:16px}
+.mprice{font:800 1.75rem/1 var(--f-display);letter-spacing:-.02em}
+.mrow{display:flex;justify-content:space-between;align-items:end;gap:8px;margin-top:auto}
+.tags{display:flex;gap:6px;flex-wrap:wrap}
+
+/* form */
+.formgrid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:32px;align-items:start}
+.fsec{border:1px solid var(--line);border-radius:20px;padding:24px;margin-bottom:24px;background:#fff}
+.fsec h3{margin-bottom:4px}
+.field{margin-top:20px}
+.field label,.field .lbl{display:block;font:600 .8125rem/1.4 var(--f-sans);letter-spacing:.01em;margin-bottom:2px}
+.field .help{display:block;font-size:.875rem;color:var(--ink-500);margin-bottom:8px}
+.inp{width:100%;min-height:44px;border:1px solid var(--line);border-radius:12px;padding:10px 14px;font:400 16px/1.4 var(--f-sans);color:var(--ink-900);background:#fff}
+.inp:hover{border-color:var(--line-strong)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.stepper{display:inline-flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:9999px;padding:4px}
+.stepper button{width:40px;height:40px;border-radius:50%;border:0;background:var(--accent-tint);color:var(--accent-dark);font:700 1.25rem/1 var(--f-sans);cursor:pointer}
+.stepper button:hover{background:var(--tint-a)}
+.stepper output{min-width:64px;text-align:center;font-weight:700}
+.skillgroup{margin-top:20px}
+.skillgroup .lbl{font:700 .75rem/1.3 var(--f-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-500);margin-bottom:10px}
+.pills{display:flex;flex-wrap:wrap;gap:8px}
+.pill input{position:absolute;opacity:0}
+.pill span{display:inline-flex;align-items:center;min-height:40px;padding:8px 16px;border-radius:9999px;border:1px solid var(--line);font-weight:500;font-size:.9375rem;color:var(--ink-700);cursor:pointer;transition:background-color 180ms var(--ease),border-color 180ms var(--ease)}
+.pill span:hover{background:var(--sunk);border-color:var(--line-strong)}
+.pill input:checked+span{background:var(--accent-tint);border-color:var(--accent);color:var(--accent-dark);font-weight:600}
+.pill input:focus-visible+span{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--accent)}
+details.opt{border:1px solid var(--line);border-radius:20px;background:#fff;margin-bottom:24px}
+details.opt summary{list-style:none;cursor:pointer;padding:20px 24px;min-height:44px;display:flex;justify-content:space-between;gap:12px;align-items:center}
+details.opt summary::-webkit-details-marker{display:none}
+details.opt summary::after{content:"";width:10px;height:10px;border-right:2px solid var(--ink-700);border-bottom:2px solid var(--ink-700);transform:rotate(45deg);transition:transform 180ms var(--ease);flex:none}
+details.opt[open] summary::after{transform:rotate(-135deg)}
+details.opt .body{padding:0 24px 24px}
+.sticky{position:sticky;top:16px}
+.preview{border-radius:20px;overflow:hidden;background:var(--hero-grad);padding:20px}
+.preview .card{padding:24px}
+
+/* tables & charts */
+.tbl{width:100%;border-collapse:collapse;font-size:.9375rem}
+.tbl th{text-align:left;font:700 .75rem/1.3 var(--f-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-500);padding:10px 12px;border-bottom:1px solid var(--line)}
+.tbl td{padding:12px;border-bottom:1px solid var(--line)}
+.tbl tr:nth-child(even) td{background:var(--sunk)}
+.scroll{overflow-x:auto}
+.chart{width:100%;height:auto;display:block}
+.chart text{font:400 12px var(--f-sans);fill:var(--ink-500)}
+.chart .grid{stroke:#EDEDF1}
+.chart .axis{stroke:var(--line-strong)}
+details.data{margin-top:12px}
+details.data summary{cursor:pointer;font-weight:600;color:var(--link);min-height:40px;display:flex;align-items:center}
+.stat .v{font:700 1.75rem/1.2 var(--f-sans);font-variant-numeric:tabular-nums;margin-top:4px}
+.filters{display:flex;gap:8px;flex-wrap:wrap}
+.tog{border:1px solid var(--line);background:#fff;border-radius:9999px;min-height:40px;padding:8px 16px;font:600 .9375rem/1 var(--f-sans);color:var(--ink-700);cursor:pointer}
+.tog:hover{background:var(--sunk)}
+.tog[aria-pressed="true"]{background:var(--accent-tint);border-color:var(--accent);color:var(--accent-dark)}
+.hr{height:1px;background:var(--line);margin-block:24px;border:0}
+
+/* login */
+.loginwrap{padding-block:32px 96px;display:grid;place-items:center}
+.logincard{width:100%;max-width:440px}
+
+/* jump bar */
+#jump{position:fixed;left:0;right:0;bottom:0;z-index:20;background:#0B0B0F;color:#fff;padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));display:flex;gap:8px;overflow-x:auto;align-items:center}
+#jump b{font:700 .75rem/1 var(--f-sans);letter-spacing:.08em;text-transform:uppercase;color:#C9C9D2;white-space:nowrap;margin-right:4px}
+#jump a{white-space:nowrap;text-decoration:none;font:600 .875rem/1 var(--f-sans);padding:10px 14px;border-radius:9999px;border:1px solid #3F3F4A;color:#fff}
+#jump a:hover{background:#3F3F4A}
+#jump a[aria-current="page"]{background:#fff;color:#0B0B0F;border-color:#fff}
+
+[data-view]{display:none}
+[data-view].show{display:block}
+
+@media (max-width:900px){
+  .hgrid{grid-template-columns:1fr;gap:32px;padding-block:32px 56px}
+  .g3,.g4{grid-template-columns:1fr 1fr}
+  .formgrid{grid-template-columns:1fr}
+  .sticky{position:static}
+  .g2{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .g3,.g4,.two{grid-template-columns:1fr}
+  .card{padding:24px}
+  .actions .btn{flex:1 1 100%}
+  .nav .lnk.opt-hide{display:none}
+  .close{padding:40px 24px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="logo" viewBox="0 0 28 28"><rect width="28" height="28" rx="9" fill="currentColor"/><path d="M8 20 L8 12 Q8 8 12 8 L20 8" fill="none" style="stroke:var(--logo-ink,#fff)" stroke-width="3" stroke-linecap="round"/><circle cx="20" cy="20" r="3" style="fill:var(--logo-ink,#fff)"/></symbol>
+  <symbol id="check" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="currentColor"/><path d="M6 10.5l2.8 2.8L14 7.8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header id="hdr"></header>
+
+<main>
+<!-- ============ HOME ============ -->
+<section data-view="home">
+  <div class="hero on-dark dark hero-wrap">
+    <div class="in hgrid">
+      <div>
+        <h1 class="display-xl">Know what your time is <em>worth</em>.</h1>
+        <p class="lead">Tell us about your sessions. Get a suggested price, and see what mentors like you charge.</p>
+        <div class="cta">
+          <a class="btn white" href="#register">Get my price</a>
+          <a class="textlink" href="#login">I'm an existing mentor</a>
+        </div>
+        <p class="fine">Free to try. You set the final price.</p>
+      </div>
+      <div class="card" role="group" aria-label="Example price suggestion" style="max-width:440px;margin-inline:auto;width:100%">
+        <div class="overline">Suggested session price</div>
+        <div class="figure">$185<small>AUD</small></div>
+        <div class="range">Similar mentors charge $126 to $276</div>
+        <div class="ladder" role="img" aria-label="Suggested price of 185 dollars sits in the middle of what similar mentors charge, 126 to 276 dollars">
+          <div class="track"><div class="band"></div><div class="tri"></div></div>
+          <div class="ends"><span>$90</span><span>$126 to $276 typical</span><span>$420</span></div>
+        </div>
+        <p class="sentence">This is advice, not a rule. Mentors with a profile like yours usually charge close to this.</p>
+        <p class="note"><strong>Early estimate.</strong> With no session history yet, this range is wider. It sharpens as you add more.</p>
+        <div class="actions"><a class="btn solid" href="#price" style="color:#fff">Accept</a><a class="btn quiet" href="#price">Change</a><a class="btn quiet" href="#price">Decline</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="soft">
+    <div class="in sec">
+      <h2 class="display" style="max-width:16ch;margin-bottom:40px">Three steps to a price you can defend.</h2>
+      <div class="grid g3">
+        <div class="step"><div class="overline">Step 1</div><h3 class="h3">Tell us what you offer</h3><p>Your field, how many people you mentor at once, and the skills you cover.</p></div>
+        <div class="step"><div class="overline">Step 2</div><h3 class="h3">See your suggested price</h3><p>One number, the range around it, and how it compares with mentors like you.</p></div>
+        <div class="step"><div class="overline">Step 3</div><h3 class="h3">Accept, change or decline</h3><p>It is your call. Come back any time to see how your price sits over the months.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="in sec tight">
+    <div style="display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;margin-bottom:24px">
+      <h2 class="display" style="max-width:14ch">Mentors already here.</h2>
+      <a class="textlink" href="#mentors">Browse all mentors</a>
+    </div>
+    <div class="grid g3" id="home-mentors"></div>
+  </div>
+
+  <div class="in" style="padding-bottom:56px">
+    <div class="close on-dark dark">
+      <h2 class="display">Start with your first price.</h2>
+      <div class="cta"><a class="btn white" href="#register">Register</a><a class="btn" href="#login">Existing mentor</a></div>
+    </div>
+  </div>
+  <div class="in small" style="padding-bottom:40px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>Pathwise</span><span>Prices are suggestions in Australian dollars. The final price is always yours.</span></div>
+</section>
+
+<!-- ============ LOGIN ============ -->
+<section data-view="login">
+  <div class="hero on-dark dark hero-wrap">
+    <div class="in loginwrap">
+      <div class="card logincard">
+        <h1 class="h2">Welcome back</h1>
+        <p class="small" style="margin:4px 0 0">Log in to see your price history and how you compare.</p>
+        <div class="field"><label for="le">Email</label><input class="inp" id="le" type="email" value="amara@example.com"></div>
+        <div class="field"><label for="lp">Password</label><input class="inp" id="lp" type="password" value="password"></div>
+        <div style="margin-top:24px"><a class="btn solid wide" href="#dashboard">Log in</a></div>
+        <p class="small" style="margin:20px 0 0;text-align:center">New here? <a class="textlink" href="#register">Register as a mentor</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ REGISTER ============ -->
+<section data-view="register">
+  <div class="banner"><div class="in"><h1 class="display" style="font-size:clamp(1.75rem,5vw,2.5rem)">Create your mentor profile</h1><p>Four short parts. We use them to suggest a price. You can change anything later.</p></div></div>
+  <div class="in sec tight">
+    <div class="formgrid">
+      <form onsubmit="return false">
+        <div class="fsec">
+          <h2 class="h3">Your account</h2><p class="small" style="margin:0">So you can log back in.</p>
+          <div class="two">
+            <div class="field"><label for="rn">Full name</label><input class="inp" id="rn" placeholder="e.g. Amara Njoroge"></div>
+            <div class="field"><label for="re">Email</label><input class="inp" id="re" type="email" placeholder="you@example.com"></div>
+          </div>
+          <div class="field"><label for="rp">Password</label><span class="help">At least 8 characters.</span><input class="inp" id="rp" type="password"></div>
+        </div>
+        <div class="fsec">
+          <h2 class="h3">What you offer</h2><p class="small" style="margin:0">This does most of the work in your price.</p>
+          <div class="field"><label for="rf">Your field</label><span class="help">The area you mentor in most.</span>
+            <select class="inp" id="rf"><option>Software and data</option><option>Business and finance</option><option>Health and care</option><option>Creative and design</option><option>Law and policy</option><option>Education and research</option><option>Engineering</option><option>Marketing and sales</option></select></div>
+          <div class="field"><span class="lbl">How many people per session?</span><span class="help">Choose 1 for one-to-one. Up to 8 for a group.</span>
+            <div class="stepper"><button type="button" id="dec" aria-label="Fewer people">&minus;</button><output id="gs" aria-live="polite">1 person</output><button type="button" id="inc" aria-label="More people">+</button></div></div>
+        </div>
+        <div class="fsec">
+          <h2 class="h3">Skills you cover</h2><p class="small" style="margin:0">Tick everything that applies. Covering more skills slightly raises the suggestion.</p>
+          <div id="skills"></div>
+        </div>
+        <details class="opt">
+          <summary><span><span class="h3" style="display:block">More about you</span><span class="small">Optional. Adds to your public profile. Shown on your card, not used in the price.</span></span></summary>
+          <div class="body">
+            <div class="two"><div class="field"><label for="ry">Years of experience</label><input class="inp" id="ry" type="number" placeholder="e.g. 8"></div>
+            <div class="field"><label for="rl">Education</label><select class="inp" id="rl"><option>Prefer not to say</option><option>Diploma</option><option>Bachelor's degree</option><option>Master's degree</option><option>Doctorate</option></select></div></div>
+            <div class="field"><label for="rc">Credentials</label><input class="inp" id="rc" placeholder="e.g. Certified coach, CPA"></div>
+          </div>
+        </details>
+        <button class="btn solid" type="button" onclick="location.hash='price'" style="color:#fff">See my suggested price</button>
+        <p class="small" style="margin-top:12px">New profiles start as not verified. A check mark appears once your details are confirmed.</p>
+      </form>
+
+      <aside class="sticky" aria-label="Live price preview">
+        <div class="preview">
+          <div class="card">
+            <div class="overline">Your price so far</div>
+            <div class="figure" id="pv">$207<small>per person</small></div>
+            <div class="range num" id="pvr">Full session of 1: $207</div>
+            <p class="small" style="margin:12px 0 0">Example numbers. Updates as you change group size. The full suggestion comes on the next screen.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PRICE ============ -->
+<section data-view="price">
+  <div class="hero on-dark dark hero-wrap">
+    <div class="in" style="padding-block:40px 64px">
+      <div class="grid g2" style="align-items:center;gap:40px">
+        <div>
+          <div class="overline" style="color:#C7D2FE">Your suggestion</div>
+          <h1 class="display" style="margin-top:8px;max-width:14ch">Here is what we suggest, <em>Amara</em>.</h1>
+          <p class="lead" style="margin:16px 0 0;color:#E0E7FF">Based on your field, group size and skills, compared with similar mentors.</p>
+        </div>
+        <div class="card" style="max-width:460px;width:100%;margin-inline:auto">
+          <div class="overline">Suggested session price</div>
+          <div class="figure">$210<small>AUD, one-to-one</small></div>
+          <div class="range">Similar mentors charge $142 to $314</div>
+          <p class="sentence">This is advice, not a rule. Mentors like you usually charge close to this, and you decide the final price.</p>
+          <p class="note"><strong>Early estimate.</strong> You have no session history yet, so this range is wider. It sharpens as you add more.</p>
+          <div class="actions"><a class="btn solid" href="#dashboard" style="color:#fff">Accept $210</a><a class="btn quiet" href="#price">Change</a><a class="btn quiet" href="#dashboard">Decline</a></div>
+          <div class="field" style="margin-top:20px"><label for="mp">Or set your own price (AUD)</label><input class="inp" id="mp" inputmode="numeric" placeholder="e.g. 230"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="in sec">
+    <div class="grid g2" style="gap:24px;align-items:start">
+      <div class="flat">
+        <h2 class="h3">Where your price sits</h2>
+        <p class="sentence" style="margin:8px 0 0">Your suggested price is in the middle of what similar mentors charge. About 6 in 10 charge between $142 and $314.</p>
+        <div class="ladder" role="img" aria-label="Suggested price 210 dollars is inside the typical range of 142 to 314 dollars">
+          <div class="track"><div class="band" style="left:23%;width:49%"></div><div class="tri" style="left:46%"></div></div>
+          <div class="ends"><span>$90</span><span>$142 to $314 typical</span><span>$420</span></div>
+        </div>
+        <div class="legend"><span><i class="sw-tri"></i>Suggested</span><span><i class="sw-band"></i>Where most mentors sit</span></div>
+      </div>
+      <div class="flat">
+        <h2 class="h3">Mentors like you</h2>
+        <p class="sentence" style="margin:8px 0 0">24 mentors in your field mentor one-to-one. Each dot is one of them.</p>
+        <svg id="dots1" class="chart" viewBox="0 0 640 150" role="img" aria-label="Dot strip of 24 similar mentors, prices between 96 and 392 dollars, with your suggested 210 dollars near the middle"></svg>
+        <div style="margin-top:8px"><a class="textlink" href="#similar">See all similar mentors</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SIMILAR ============ -->
+<section data-view="similar">
+  <div class="banner"><div class="in"><h1 class="display" style="font-size:clamp(1.75rem,5vw,2.5rem)">What similar mentors charge</h1><p>Mentors in software and data, one-to-one. Names are hidden to protect privacy.</p></div></div>
+  <div class="in sec tight">
+    <div class="filters" role="group" aria-label="Match">
+      <button class="tog" aria-pressed="true">Same field</button>
+      <button class="tog" aria-pressed="true">Same group size</button>
+      <button class="tog" aria-pressed="false">Any group size</button>
+    </div>
+    <p class="sentence" style="margin:20px 0 0;max-width:68ch"><strong>You would sit in the middle.</strong> Of 24 similar mentors, half charge between $168 and $262. Your $210 is close to the typical $208.</p>
+    <div class="flat" style="margin-top:20px"><svg id="dots2" class="chart" viewBox="0 0 640 150" role="img" aria-label="Dot strip of 24 similar mentors with your suggested price marked at 210 dollars"></svg></div>
+    <div class="flat scroll" style="margin-top:24px;padding:12px">
+      <table class="tbl"><caption class="small" style="text-align:left;padding:8px 12px">Similar mentors</caption>
+        <thead><tr><th>Mentor</th><th>Field</th><th>Group size</th><th>Reviews</th><th>Price per session</th></tr></thead>
+        <tbody id="sim-rows"></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MENTORS ============ -->
+<section data-view="mentors">
+  <div class="banner"><div class="in"><h1 class="display" style="font-size:clamp(1.75rem,5vw,2.5rem)">Browse mentors</h1><p>See who is on Pathwise and what they charge.</p></div></div>
+  <div class="in sec tight">
+    <div class="filters" role="group" aria-label="Filter by field" style="margin-bottom:24px">
+      <button class="tog" aria-pressed="true">All fields</button><button class="tog" aria-pressed="false">Software and data</button><button class="tog" aria-pressed="false">Business and finance</button><button class="tog" aria-pressed="false">Health and care</button><button class="tog" aria-pressed="false">Creative and design</button>
+    </div>
+    <div class="grid g3" id="dir"></div>
+  </div>
+</section>
+
+<!-- ============ DASHBOARD ============ -->
+<section data-view="dashboard">
+  <div class="banner"><div class="in" style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:end">
+    <div><h1 class="display" style="font-size:clamp(1.75rem,5vw,2.5rem)">Hello, Amara</h1><p>Here is how your sessions and price have moved this year.</p></div>
+    <a class="btn white" style="background:#fff;color:#312E81;border-color:#fff" href="#add-service">Add a service</a>
+  </div></div>
+  <div class="in sec tight">
+    <div class="grid g4">
+      <div class="flat stat"><div class="overline">Your price now</div><div class="v">$210</div><div class="small">per one-to-one session</div></div>
+      <div class="flat stat"><div class="overline">Similar mentors</div><div class="v">$208</div><div class="small">typical price</div></div>
+      <div class="flat stat"><div class="overline">Reviews this year</div><div class="v">47</div><div class="small">up from 31 last year</div></div>
+      <div class="flat stat"><div class="overline">Booked</div><div class="v">62%</div><div class="small">of available days</div></div>
+    </div>
+
+    <div class="flat" style="margin-top:24px">
+      <h2 class="h3">How you compare</h2>
+      <p class="sentence" style="margin:8px 0 0;max-width:68ch">You charge about the same as other one-to-one mentors in your field. You are booked more than most, so there is room to raise your price.</p>
+      <div class="ladder" role="img" aria-label="Your current price of 210 dollars sits near the middle of similar mentors, 142 to 314 dollars">
+        <div class="track"><div class="band" style="left:23%;width:49%"></div><div class="cur" style="left:46%"></div></div>
+        <div class="ends"><span>$90</span><span>$142 to $314 typical</span><span>$420</span></div>
+      </div>
+      <div class="legend"><span><i class="sw-cir"></i>Your price now</span><span><i class="sw-band"></i>Where most mentors sit</span></div>
+    </div>
+
+    <div class="grid g2" style="margin-top:24px">
+      <div class="flat"><h2 class="h3">Your price through the year</h2><p class="small" style="margin:4px 0 8px">Your price rose from $176 to $210 over twelve months.</p>
+        <svg id="ch-price" class="chart" viewBox="0 0 640 240" role="img" aria-label="Line chart: price rose from 176 to 210 dollars over twelve months"></svg>
+        <details class="data"><summary>View data as a table</summary><div class="scroll" id="t-price"></div></details></div>
+      <div class="flat"><h2 class="h3">Reviews each month</h2><p class="small" style="margin:4px 0 8px">Reviews peak in spring and dip in winter.</p>
+        <svg id="ch-rev" class="chart" viewBox="0 0 640 240" role="img" aria-label="Bar chart of reviews per month, highest in October at 8"></svg>
+        <details class="data"><summary>View data as a table</summary><div class="scroll" id="t-rev"></div></details></div>
+    </div>
+
+    <div class="flat" style="margin-top:24px">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center"><h2 class="h3">Your services</h2><a class="btn quiet sm" href="#add-service">Add a service</a></div>
+      <div class="scroll"><table class="tbl" style="margin-top:8px"><thead><tr><th>Service</th><th>People</th><th>Your price</th><th>Suggested</th><th>Decision</th></tr></thead><tbody>
+        <tr><td>Career coaching</td><td>1</td><td class="num">$210</td><td class="num">$225</td><td><span class="chip ok"><svg><use href="#check"/></svg>Accepted</span></td></tr>
+        <tr><td>Interview prep group</td><td>4</td><td class="num">$392</td><td class="num">$392</td><td><span class="chip">Pending</span></td></tr></tbody></table></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ADD SERVICE ============ -->
+<section data-view="add-service">
+  <div class="banner"><div class="in"><h1 class="display" style="font-size:clamp(1.75rem,5vw,2.5rem)">Add a service</h1><p>Offer something new and get a suggested price for it.</p></div></div>
+  <div class="in narrow sec tight" style="max-width:720px">
+    <form onsubmit="return false">
+      <div class="fsec">
+        <div class="field" style="margin-top:0"><label for="sn">Service name</label><input class="inp" id="sn" placeholder="e.g. CV review"></div>
+        <div class="field"><span class="lbl">How many people per session?</span><span class="help">Choose 1 for one-to-one.</span><div class="stepper"><button type="button" aria-label="Fewer people">&minus;</button><output>1 person</output><button type="button" aria-label="More people">+</button></div></div>
+        <div class="field"><label for="ss">Skills covered</label><span class="help">Pick from the skills on your profile.</span><input class="inp" id="ss" placeholder="CV review, Cover letter writing"></div>
+      </div>
+      <button class="btn solid" type="button" onclick="location.hash='price'" style="color:#fff">See the suggested price</button>
+    </form>
+  </div>
+</section>
+</main>
+
+<nav id="jump" aria-label="Mockup pages"><b>Mockup</b>
+  <a href="#home">Landing</a><a href="#login">Log in</a><a href="#register">Register</a><a href="#price">Price</a><a href="#similar">Similar</a><a href="#mentors">Directory</a><a href="#dashboard">Dashboard</a><a href="#add-service">Add service</a></nav>
+
+<script>
+var MENTORS=[
+ {n:"Amara Njoroge",f:"Career coaching",fld:"Software and data",g:1,p:210,v:true,r:47,c:"var(--tint-a)"},
+ {n:"Daniel Whitfield",f:"Finance careers",fld:"Business and finance",g:1,p:265,v:true,r:62,c:"var(--tint-b)"},
+ {n:"Priya Raman",f:"Interview prep group",fld:"Software and data",g:4,p:392,v:true,r:38,c:"var(--tint-c)"},
+ {n:"Tomas Herrera",f:"Portfolio reviews",fld:"Creative and design",g:2,p:292,v:true,r:21,c:"var(--tint-d)"},
+ {n:"Lena Okafor",f:"Nursing leadership",fld:"Health and care",g:1,p:185,v:false,r:0,c:"var(--tint-a)"},
+ {n:"Sam Nguyen",f:"Graduate applications",fld:"Education and research",g:6,p:510,v:true,r:29,c:"var(--tint-b)"}
+];
+function initials(n){return n.split(" ").map(function(x){return x[0]}).slice(0,2).join("")}
+function mcard(m){
+  var badge=m.v?'<span class="chip ok"><svg aria-hidden="true"><use href="#check"/></svg>Verified</span>':'<span class="chip new">New, not verified yet</span>';
+  var grp=m.g===1?"One-to-one":"Group of "+m.g;
+  return '<article class="flat mcard"><div class="mhead"><div class="mav" style="background:'+m.c+'" aria-hidden="true">'+initials(m.n)+'</div><div><div class="mname">'+m.n+'</div><div class="small">'+m.f+'</div></div></div>'+
+  '<div class="tags">'+badge+'<span class="chip">'+m.fld+'</span></div>'+
+  '<div class="mrow"><div><div class="mprice num">$'+m.p+'</div><div class="small">'+grp+' session</div></div><div class="small">'+(m.r?m.r+' reviews':'No reviews yet')+'</div></div></article>';
+}
+document.getElementById("home-mentors").innerHTML=MENTORS.slice(0,3).map(mcard).join("");
+document.getElementById("dir").innerHTML=MENTORS.map(mcard).join("");
+
+var SK={"Getting hired":["CV review","Cover letter writing","Interview preparation","LinkedIn profile review","Portfolio review","Graduate applications","Job search strategy"],
+"Growing your career":["Career planning","Career change","Salary negotiation","Promotion planning","Performance reviews","Personal branding","Further studies guidance","Networking"],
+"Skills at work":["Leadership","Public speaking","Time management","Project management","Workplace communication","Conflict resolution","Mentoring skills","Presentation skills","Data analysis","Technical skills coaching"],
+"Business and balance":["Entrepreneurship","Work-life balance","Goal setting","Remote work","Professional ethics"]};
+var pre={"CV review":1,"Interview preparation":1,"Career planning":1};
+var sh="",k=0;
+Object.keys(SK).forEach(function(g){
+  sh+='<div class="skillgroup"><div class="lbl">'+g+'</div><div class="pills">';
+  SK[g].forEach(function(s){k++;sh+='<label class="pill"><input type="checkbox" id="sk'+k+'"'+(pre[s]?' checked':'')+'><span>'+s+'</span></label>'});
+  sh+='</div></div>';
+});
+document.getElementById("skills").innerHTML=sh;
+
+/* live preview by group size: per-person and full-session */
+var PER={1:207,2:146,3:107,4:98,5:90,6:85,7:83,8:81};
+var size=1;
+function upd(){
+  document.getElementById("gs").textContent=size===1?"1 person":size+" people";
+  document.getElementById("pv").innerHTML="$"+PER[size]+'<small>per person</small>';
+  document.getElementById("pvr").textContent=size===1?"One-to-one session: $207":"Full session of "+size+": $"+(PER[size]*size);
+}
+document.getElementById("inc").onclick=function(){if(size<8){size++;upd()}};
+document.getElementById("dec").onclick=function(){if(size>1){size--;upd()}};
+
+/* chart helpers */
+var NS="http://www.w3.org/2000/svg";
+function el(t,a,txt){var e=document.createElementNS(NS,t);for(var x in a)e.setAttribute(x,a[x]);if(txt!=null)e.textContent=txt;return e}
+function axes(svg,W,H,L,R,T,B,min,max,step,fmt){
+  for(var v=min;v<=max;v+=step){var y=T+(H-T-B)*(1-(v-min)/(max-min));
+    svg.appendChild(el("line",{x1:L,x2:W-R,y1:y,y2:y,"class":"grid"}));
+    svg.appendChild(el("text",{x:L-8,y:y+4,"text-anchor":"end"},fmt(v)))}
+  svg.appendChild(el("line",{x1:L,x2:W-R,y1:H-B,y2:H-B,"class":"axis"}));
+}
+var MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function table(id,cap,head,vals,fmt){
+  var h='<table class="tbl"><caption class="small" style="text-align:left;padding:8px 12px">'+cap+'</caption><thead><tr><th>Month</th><th>'+head+'</th></tr></thead><tbody>';
+  vals.forEach(function(v,i){h+='<tr><td>'+MON[i]+'</td><td class="num">'+fmt(v)+'</td></tr>'});
+  document.getElementById(id).innerHTML=h+'</tbody></table>';
+}
+var PRICE=[176,176,180,184,188,192,196,198,202,206,208,210];
+var REV=[2,3,4,6,7,5,3,3,5,8,4,3];
+(function(){
+  var s=document.getElementById("ch-price"),W=640,H=240,L=52,R=16,T=16,B=32,min=160,max=220;
+  axes(s,W,H,L,R,T,B,min,max,20,function(v){return "$"+v});
+  var pts=PRICE.map(function(v,i){return [L+(W-L-R)*i/11,T+(H-T-B)*(1-(v-min)/(max-min))]});
+  s.appendChild(el("polyline",{points:pts.map(function(p){return p.join(",")}).join(" "),fill:"none",stroke:"#4338CA","stroke-width":2.5,"stroke-linejoin":"round"}));
+  pts.forEach(function(p,i){s.appendChild(el("circle",{cx:p[0],cy:p[1],r:4,fill:"#4338CA",stroke:"#fff","stroke-width":2}));s.appendChild(el("text",{x:p[0],y:H-10,"text-anchor":"middle"},MON[i]))});
+  table("t-price","Price per session by month (AUD)","Price",PRICE,function(v){return "$"+v});
+  var b=document.getElementById("ch-rev");axes(b,W,H,L-14,R,T,B,0,10,2,function(v){return v});
+  var bw=(W-(L-14)-R)/12;
+  REV.forEach(function(v,i){var h=(H-T-B)*v/10;b.appendChild(el("rect",{x:L-14+i*bw+6,y:H-B-h,width:bw-12,height:h,rx:6,fill:"#4338CA"}));b.appendChild(el("text",{x:L-14+i*bw+bw/2,y:H-10,"text-anchor":"middle"},MON[i]))});
+  table("t-rev","Reviews received by month","Reviews",REV,function(v){return v});
+})();
+
+/* dot strip */
+var COMP=[96,118,131,142,150,158,166,172,178,185,190,196,204,208,214,221,230,241,255,268,284,310,342,392];
+function strip(id){
+  var s=document.getElementById(id),W=640,L=24,R=24,min=60,max=420,y0=88;
+  function x(v){return L+(W-L-R)*(v-min)/(max-min)}
+  s.appendChild(el("line",{x1:L,x2:W-R,y1:y0+24,y2:y0+24,"class":"axis"}));
+  [60,120,180,240,300,360,420].forEach(function(v){s.appendChild(el("text",{x:x(v),y:y0+44,"text-anchor":"middle"},"$"+v))});
+  COMP.forEach(function(v,i){s.appendChild(el("circle",{cx:x(v),cy:y0-6-((i*37)%5)*10,r:6,fill:"#55555F"}))});
+  s.appendChild(el("circle",{cx:x(210),cy:y0+6,r:9,fill:"#fff",stroke:"#4338CA","stroke-width":3}));
+  s.appendChild(el("text",{x:x(210),y:y0-48,"text-anchor":"middle",style:"fill:#4338CA;font-weight:700"},"You $210"));
+  s.appendChild(el("line",{x1:x(210),x2:x(210),y1:y0-42,y2:y0-4,stroke:"#4338CA","stroke-width":1.5}));
+}
+strip("dots1");strip("dots2");
+document.getElementById("sim-rows").innerHTML=COMP.slice(0,10).map(function(v,i){var fl=["Software and data"];return '<tr><td>Mentor '+(1040+i*7)+'</td><td>'+fl[0]+'</td><td>1</td><td class="num">'+(10+i*4)+'</td><td class="num">$'+v+'</td></tr>'}).join("");
+
+/* header + routing */
+var PUB={home:1,login:1};
+var HDR_DARK={home:1,login:1,price:1};
+function nav(view){
+  var app=!PUB[view];
+  var dark=HDR_DARK[view];
+  var h=document.getElementById("hdr");
+  h.className=dark?"hdr-dark on-dark dark":"hdr-light";
+  var logo='<a class="brand" href="#home" aria-label="Pathwise home"><svg class="mark" aria-hidden="true" style="color:'+(dark?'#fff':'#0B0B0F')+';--logo-ink:'+(dark?'#1E1B8F':'#fff')+'"><use href="#logo"/></svg>Pathwise</a>';
+  var links;
+  if(!app){links='<a class="lnk opt-hide" href="#mentors">Browse mentors</a><a class="btn sm" href="#login">Existing mentor</a><a class="btn sm white" href="#register">Register</a>'}
+  else{links='<a class="lnk" href="#mentors"'+(view==="mentors"?' aria-current="page"':'')+'>Mentors</a><a class="lnk" href="#dashboard"'+(view==="dashboard"?' aria-current="page"':'')+'>Dashboard</a><a class="lnk" href="#home">Log out</a><span class="avatar" aria-hidden="true">AN</span>'}
+  if(dark&&app){links=links}
+  h.innerHTML='<div class="in bar">'+logo+'<div class="nav">'+links+'</div></div>';
+  if(!app){h.querySelectorAll(".btn.sm").forEach(function(b){if(!dark){b.classList.remove("white")}})}
+  if(!app&&!dark){h.querySelector(".btn.white")&&h.querySelector(".btn.white").classList.add("solid")}
+}
+function route(){
+  var v=(location.hash||"#home").slice(1);
+  var views=document.querySelectorAll("[data-view]"),found=false;
+  views.forEach(function(s){var on=s.getAttribute("data-view")===v;if(on)found=true});
+  if(!found)v="home";
+  views.forEach(function(s){s.classList.toggle("show",s.getAttribute("data-view")===v)});
+  document.querySelectorAll("#jump a").forEach(function(a){a.removeAttribute("aria-current");if(a.getAttribute("href")==="#"+v)a.setAttribute("aria-current","page")});
+  nav(v);window.scrollTo(0,0);
+}
+window.addEventListener("hashchange",route);route();
+document.querySelectorAll(".tog").forEach(function(b){b.addEventListener("click",function(){var g=b.parentNode;if(g.getAttribute("aria-label")==="Match"){b.setAttribute("aria-pressed",b.getAttribute("aria-pressed")==="true"?"false":"true")}else{g.querySelectorAll(".tog").forEach(function(x){x.setAttribute("aria-pressed","false")});b.setAttribute("aria-pressed","true")}})});
+</script>
