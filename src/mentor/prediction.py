@@ -42,7 +42,12 @@ import pandas as pd
 from src.config import PROJECT_ROOT
 from src.mentor.mapping import (
     COLUMN_MAX_MENTEES,
+    COLUMN_SKILLS,
     CURRENCY,
+    MAX_MENTEES_MAX,
+    MAX_MENTEES_MIN,
+    SKILL_COUNT,
+    SKILL_WEIGHT,
     ModelColumnsMismatchError,
     check_model_columns,
 )
@@ -51,6 +56,49 @@ APP_ASSETS_DIR = PROJECT_ROOT / "app_assets"
 
 CORE = "core"
 FULL = "full"
+
+# ---------------------------------------------------------------------------
+# The monotone envelope
+#
+# Two of the answers behind a price are ones a mentor can only raise by
+# offering more: how many skills the service covers, and how many mentees can
+# join a session. Neither is something a mentor can do more of and reasonably
+# be told to charge less for.
+#
+# The models disagree. Breadth of offering reaches them as one number, and the
+# shape they learned for it is not monotone: over some stretches of the range
+# a wider offering scores slightly lower than a narrower one. The same is true
+# of group size in places. Both are artefacts of what the training data
+# happens to hold rather than rules anybody would defend, and they surface as
+# a mentor ticking one more skill, or adding one more seat, and watching their
+# suggested price fall.
+#
+# So a price is read off an envelope rather than off the single point the
+# model returns. For one profile the service scores every combination of a
+# group size up to the one asked for and a skill count up to the one chosen,
+# in a single call, and takes the largest. The price at a given pair is
+# therefore the best the model says about that profile at that pair or at any
+# smaller one, which is non-decreasing in both by construction. Plateaus are
+# expected and are the honest answer: they say the model sees no further gain,
+# not that there is a loss.
+#
+# Because the range either side is worked out from the enveloped price rather
+# than from the raw one, neither end of it can fall as a skill is ticked or a
+# seat is added either.
+#
+# Three things this deliberately is not. It is not a retrain: the fitted
+# pipelines are untouched and the correction lives in the service that reads
+# them. It is not a per-skill weighting: a model is given the count and
+# nothing else about which skills were chosen, so there is no evidence in the
+# system for one skill being worth more than another. And it is not symmetric:
+# it can only raise a price relative to the raw model, never lower one, which
+# is a bias worth stating wherever these prices are reported.
+#
+# The fewest skills a service may offer is zero. A mentor may publish a
+# service before choosing what to put in it, so zero is a real answer and the
+# envelope starts there.
+# ---------------------------------------------------------------------------
+SKILL_COUNT_MIN = 0
 
 ASSETS_MISSING_MESSAGE = (
     "The pricing models are not available on this server. They are build "
@@ -225,6 +273,87 @@ class PricingService:
         )
         return self.predict_many([values], model_used)[0]
 
+    def skill_count(self, values: dict[str, Any]) -> int:
+        """
+        How many skills the breadth-of-offering value in ``values`` stands for.
+
+        The inverse of what the mapping layer wrote into the row, rounded
+        because the column is a number, and held inside the list the form
+        offers, so a stored row written by something other than this
+        application cannot ask for an envelope running past the end of it.
+        """
+        try:
+            raw = float(values[COLUMN_SKILLS])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "the row does not say how many skills the service offers"
+            ) from error
+        counted = int(round(raw / SKILL_WEIGHT))
+        return int(min(max(counted, SKILL_COUNT_MIN), SKILL_COUNT))
+
+    def group_size(self, values: dict[str, Any]) -> int:
+        """How many mentees the session in ``values`` is for, inside the form's range."""
+        try:
+            raw = float(values[COLUMN_MAX_MENTEES])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "the row does not say how many mentees the session is for"
+            ) from error
+        return int(min(max(int(round(raw)), MAX_MENTEES_MIN), MAX_MENTEES_MAX))
+
+    def envelope_rows(self, values: dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Every smaller-or-equal service this profile is priced against.
+
+        One row per combination of a group size from the smallest the form
+        offers up to the one asked for, and a skill count from none up to the
+        one chosen. The row itself is always in the list, as the largest pair.
+        """
+        mentees = self.group_size(values)
+        count = self.skill_count(values)
+        return [
+            {
+                **values,
+                COLUMN_MAX_MENTEES: size,
+                COLUMN_SKILLS: step * SKILL_WEIGHT,
+            }
+            for size in range(MAX_MENTEES_MIN, mentees + 1)
+            for step in range(SKILL_COUNT_MIN, count + 1)
+        ]
+
+    def raw_prices_by_skill_count(
+        self, values: dict[str, Any], model_used: str
+    ) -> list[float]:
+        """
+        What the model says about one profile at every count up to its own.
+
+        The uncorrected ladder at this profile's own group size, clipped to
+        the fences and nothing else. It is public because it is what the
+        envelope is an envelope *of*: a test that shows the model dipping has
+        to be able to see the dip, and a second copy of this loop written
+        inside a test would be measuring something other than what the service
+        reads.
+        """
+        count = self.skill_count(values)
+        ladder = [
+            {**values, COLUMN_SKILLS: step * SKILL_WEIGHT}
+            for step in range(SKILL_COUNT_MIN, count + 1)
+        ]
+        return self._raw_prices(ladder, model_used)
+
+    def _raw_prices(
+        self, rows: Sequence[dict[str, Any]], model_used: str
+    ) -> list[float]:
+        """Every row scored in one call, as a price inside the fences."""
+        frame = self._input_frame(model_used, rows)
+
+        # The models were trained against log1p(price), so the inverse comes
+        # first and every number after it is a price.
+        predicted_log = np.asarray(
+            self.pipelines[model_used].predict(frame), dtype=float
+        )
+        return [self.clip(float(price)) for price in np.expm1(predicted_log)]
+
     def predict_many(
         self, rows: Sequence[dict[str, Any]], model_used: str
     ) -> list[PriceRecommendation]:
@@ -237,23 +366,33 @@ class PricingService:
         would otherwise either pay for one model call per row or carry its own
         copy of the clipping and the range, and a second copy of that
         arithmetic is a second answer waiting to disagree with this one.
+
+        This is the one place a price is decided, which is what makes
+        registration, the live preview, adding a service and asking for a
+        fresh price agree: all four arrive here. Each row is expanded into the
+        envelope described at the top of this module, every expansion is
+        scored in one call, and the row's price is the largest price in its
+        own envelope. The range either side is then worked out from that
+        price rather than from the raw one, so neither end of it can fall as a
+        skill is ticked or a seat is added either.
         """
         if not rows:
             return []
-        frame = self._input_frame(model_used, rows)
 
-        # The models were trained against log1p(price), so the inverse comes
-        # first and every number after it is a price.
-        predicted_log = np.asarray(
-            self.pipelines[model_used].predict(frame), dtype=float
+        envelopes = [self.envelope_rows(values) for values in rows]
+        prices = self._raw_prices(
+            [row for envelope in envelopes for row in envelope], model_used
         )
+
         band = self.ranges["models"][model_used]
         low_multiplier = float(band["low_multiplier"])
         high_multiplier = float(band["high_multiplier"])
 
         advice = []
-        for values, log_price in zip(rows, predicted_log, strict=True):
-            point = self.clip(float(np.expm1(log_price)))
+        read = 0
+        for values, envelope in zip(rows, envelopes, strict=True):
+            point = max(prices[read : read + len(envelope)])
+            read += len(envelope)
             session = (
                 int(round(point)),
                 int(round(self.clip(point * low_multiplier))),

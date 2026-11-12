@@ -45,7 +45,9 @@ test.describe("a new mentor", () => {
     await page.getByRole("button", { name: "See my suggested price" }).click();
 
     await expect(page).toHaveURL(/\/recommendation\/\d+$/);
-    await expect(page.getByText("Suggested session price")).toBeVisible();
+    await expect(
+      page.getByText("Suggested session price", { exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByText(
         "This is advice, not a rule. Mentors like you usually charge close to this, and you decide the final price.",

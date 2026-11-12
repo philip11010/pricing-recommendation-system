@@ -28,6 +28,24 @@ field" and the mentor should be told which one they are reading.
 upper tail, and a mean sits above most of the mentors it claims to describe.
 The median with the quartiles either side of it says what a typical mentor
 charges and how much spread there is around that, which is the question.
+
+**Everything the frontend draws comes out of one set of rows.** A match can
+run to a thousand mentors, which is too many to draw as points and more than
+anybody needs to see listed. So the match is reduced once, here, to an evenly
+spread sample of it: :func:`spread`. The summary, the histogram, the mentor's
+own percentile and the rows the frontend plots and tabulates are all read off
+that same sample, so the band drawn around the middle of the group is the
+quartiles of exactly the points drawn beside it.
+
+That matters because the obvious alternative is what this used to do. The
+frontend asked for a page of mentors sorted by price and plotted the page.
+The first page of a cheapest-first sort over a thousand mentors is the
+cheapest sixty of them, so the points described the bottom of the market
+while the band beside them described the whole of it, and the mentor's own
+price sat far to the right of every point for no reason anybody could see.
+``items`` still pages, because a sorted list of rows is a reasonable thing to
+ask an endpoint for, but nothing that claims to describe the market is built
+from a page any more.
 """
 
 from __future__ import annotations
@@ -71,6 +89,17 @@ GROUP_SIZE_TOLERANCE = 1
 # Bins in the price distribution the frontend draws. Twelve over the matched
 # range is enough to show a shape and few enough that each bin holds mentors.
 HISTOGRAM_BINS = 12
+
+# The most mentors described at once. A match of a thousand is a thousand
+# overlapping points on a strip that is six hundred pixels wide, and a table
+# nobody reads to the end of. A hundred and twenty is enough points to show
+# the shape of a market and few enough to draw and to scroll.
+#
+# The reduction is by rank rather than at random, and it keeps the cheapest
+# and the dearest: a sample that dropped the ends would narrow the market
+# every time it was taken, and a mentor at the top of their field would be
+# told they were off the chart.
+SPREAD_POINTS = 120
 
 # Same field, about the same group size. What a mentor actually asked for.
 MATCH_SAME_FIELD_AND_SIZE = 0
@@ -270,15 +299,51 @@ class ComparablesTable:
         )
 
 
-def summarise(found: ComparableSet) -> dict[str, Any]:
+def spread(found: ComparableSet, points: int = SPREAD_POINTS) -> pd.DataFrame:
+    """
+    The matched mentors reduced to an evenly spread sample, cheapest first.
+
+    Even by rank rather than by price: taking every nth mentor along the
+    sorted list keeps the shape of the distribution, where taking every nth
+    dollar along the range would hand back a flat line through whatever the
+    prices happen to be. The two ends are always in, so the sample spans the
+    market rather than a trimmed version of it.
+
+    A match no larger than ``points`` is returned whole and sorted, which is
+    the ordinary case for a thinly represented field. The sort is what makes
+    the result the same rows in the same order every time it is asked for,
+    which the summary beside it depends on.
+    """
+    rows = found.rows.sort_values(
+        by=["price", "price_per_mentee"], kind="mergesort"
+    ).reset_index(drop=True)
+    if len(rows) <= points or points < 1:
+        return rows
+    taken = np.unique(np.round(np.linspace(0, len(rows) - 1, points)).astype(int))
+    return rows.iloc[taken].reset_index(drop=True)
+
+
+def summarise(found: ComparableSet, points: int = SPREAD_POINTS) -> dict[str, Any]:
     """
     The headline figures for one set of comparable mentors.
+
+    Read off :func:`spread` rather than off the whole match, so that the band
+    a frontend draws around the middle of the group is the quartiles of
+    exactly the mentors it draws beside it. On a match small enough to be
+    described whole the two are the same rows, so nothing changes; on a large
+    one the quantiles move by a currency unit or two, which is the price of
+    the two halves of a screen agreeing with each other.
+
+    ``count`` is still the whole match. It answers "how many mentors is this
+    based on", which is not the same question as how many of them are drawn,
+    and reporting the sample size there would understate the comparison.
 
     Every price is null when there is nothing to summarise, rather than zero:
     a zero median would read as mentors charging nothing.
     """
-    prices = found.rows["price"].to_numpy(dtype=float)
-    each = found.rows["price_per_mentee"].to_numpy(dtype=float)
+    sample = spread(found, points)
+    prices = sample["price"].to_numpy(dtype=float)
+    each = sample["price_per_mentee"].to_numpy(dtype=float)
     empty = len(prices) == 0
 
     def quantile(values: np.ndarray, point: float) -> int | None:
@@ -299,6 +364,29 @@ def summarise(found: ComparableSet) -> dict[str, Any]:
     }
 
 
+def distribution(found: ComparableSet, points: int = SPREAD_POINTS) -> dict[str, Any]:
+    """
+    The mentors a frontend plots and lists, and what they stand for.
+
+    ``total`` is the whole match and ``shown`` is how many of them are here,
+    so a sentence above the chart can say "a hundred and twenty mentors spread
+    evenly across the one thousand and seventy we matched" rather than
+    claiming the sample is the market. ``sampled`` is the one-line version of
+    the same fact, for a frontend deciding which sentence to write.
+
+    Every price in ``items`` is what that mentor charges for a whole session,
+    which is the figure the mentor reading the page charges too. The per-seat
+    figure is beside it, never instead of it.
+    """
+    sample = spread(found, points)
+    return {
+        "total": found.count,
+        "shown": int(len(sample)),
+        "sampled": bool(len(sample) < found.count),
+        "items": [as_item(row) for _, row in sample.iterrows()],
+    }
+
+
 def histogram(found: ComparableSet, bins: int = HISTOGRAM_BINS) -> dict[str, Any]:
     """
     The distribution of session prices among the comparable mentors.
@@ -307,8 +395,12 @@ def histogram(found: ComparableSet, bins: int = HISTOGRAM_BINS) -> dict[str, Any
     frontend decides how it looks and this module decides only what it says.
     Empty lists when there is nothing to bin: a single bar covering no
     mentors would imply a distribution that was never measured.
+
+    Binned over the same sample the summary is read from, for the same
+    reason: two charts on one screen describing two different sets of mentors
+    is the fault this module was changed to remove.
     """
-    prices = found.rows["price"].to_numpy(dtype=float)
+    prices = spread(found)["price"].to_numpy(dtype=float)
     if len(prices) == 0:
         return {"bin_edges": [], "counts": []}
     low, high = float(prices.min()), float(prices.max())
@@ -331,10 +423,14 @@ def price_percentile(found: ComparableSet, price: int | None) -> float | None:
     The share of comparable mentors charging that much or less. Null when
     there is no price to place or nobody to place it among, because a zero
     would read as "cheaper than everyone" rather than "not known".
+
+    Measured against the same sample as the band, so that a price sitting on
+    the lower quartile is reported at about twenty-five per cent rather than
+    at some other number worked out from a different set of mentors.
     """
     if price is None or price <= 0 or found.count == 0:
         return None
-    prices = found.rows["price"].to_numpy(dtype=float)
+    prices = spread(found)["price"].to_numpy(dtype=float)
     return round(float((prices <= float(price)).sum()) / len(prices) * 100, 1)
 
 

@@ -8,13 +8,23 @@
  * named: the API sends a price, a field and a group size for each one and
  * nothing that identifies them, which is the point rather than an oversight.
  *
- * The three filters narrow the set the API matched. They are named after the
+ * Every price on this page is for a whole session, which is what the mentor
+ * reading it charges. The per-seat figure exists and is useful, but mixing
+ * the two on one axis is what made the two charts on the price screen
+ * disagree, so this page uses one unit and says which one in words.
+ *
+ * The chart and the table are drawn from the API's distribution: the whole
+ * match, evenly reduced by price rank. Asking for a page of a cheapest-first
+ * sort and drawing it, which is what this used to do, showed the cheap end of
+ * a market and called it the market.
+ *
+ * The three filters narrow the mentors listed here. They are named after the
  * two rules the match is made of, so what the buttons say and what the API
  * matched on are the same two things.
  */
 
-import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
 import { DotStrip } from "@/components/dot-strip";
 import { RequireAuth } from "@/components/require-auth";
@@ -25,6 +35,7 @@ import {
   EmptyState,
   ErrorNotice,
   LoadingBlock,
+  TextLink,
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
 import type { ComparableItem, ComparablesResponse, Service } from "@/lib/api-types";
@@ -32,6 +43,13 @@ import { priceScale } from "@/lib/charts";
 import { COMPARABLES_UNAVAILABLE_NOTE, WIDENED_NOTE } from "@/lib/copy";
 import { isNotFound, isUnprepared, messageFor } from "@/lib/errors";
 import { formatMoney } from "@/lib/format";
+import {
+  FROM_QUERY,
+  RECOMMENDATION_QUERY,
+  backFromOrigin,
+  type BackLink,
+} from "@/lib/origin";
+import { groupWords } from "@/lib/session-label";
 import { useAsync } from "@/lib/use-async";
 
 type Narrowing = "all" | "field" | "size";
@@ -80,7 +98,7 @@ function narrow(
   return items;
 }
 
-function SimilarMentors({ serviceId }: { serviceId: number }) {
+function SimilarMentors({ serviceId, back }: { serviceId: number; back: BackLink }) {
   const [mode, setMode] = useState<Narrowing>("all");
 
   const service = useAsync(
@@ -88,9 +106,12 @@ function SimilarMentors({ serviceId }: { serviceId: number }) {
     `service-${serviceId}`,
   );
   const options = useAsync((signal) => api.options(signal), "similar-options");
+  // The smallest page of items the endpoint allows. Everything this screen
+  // draws comes out of the distribution, which is the whole match rather
+  // than a page of it, so a larger page would be payload nobody reads.
   const comparables = useAsync(
     (signal): Promise<ComparablesResponse> =>
-      api.comparables(serviceId, { limit: 200, sort: "price" }, signal),
+      api.comparables(serviceId, { limit: 1, sort: "price" }, signal),
     `similar-comparables-${serviceId}`,
   );
 
@@ -133,26 +154,51 @@ function SimilarMentors({ serviceId }: { serviceId: number }) {
     options.data?.fields.find((option) => option.id === service.data?.field)?.label ??
     null;
 
-  const everyone = comparables.data.items;
+  const summary = comparables.data.summary;
+  const drawn = comparables.data.distribution;
+  const everyone = drawn.items;
   const shown = narrow(everyone, mode, service.data, fieldLabel);
   const prices = shown.map((item) => item.price);
   const yours = service.data.current_price;
+  const sessionsOf = groupWords(service.data.max_mentees);
 
-  const typical = median(prices);
-  const middle = quartiles(prices);
-  const scale = priceScale([...prices, yours]);
+  // The whole match when nothing is narrowed, so the sentence reports the
+  // API's own quantiles rather than quantiles of a sample of a sample.
+  const whole = mode === "all";
+  const typical = whole ? summary.median_price : median(prices);
+  const middle = whole
+    ? summary.p25_price !== null && summary.p75_price !== null
+      ? { low: summary.p25_price, high: summary.p75_price }
+      : null
+    : quartiles(prices);
 
+  const scale = priceScale([
+    ...prices,
+    middle?.low ?? null,
+    middle?.high ?? null,
+    yours,
+  ]);
+
+  const counted = whole ? drawn.total : prices.length;
   const sentence =
     prices.length === 0
       ? "No mentors match that narrowing. Widen it to see the whole set we compared you with."
-      : `Of ${prices.length} similar mentors, a typical one charges ${formatMoney(typical)}${
+      : `Of ${counted} similar mentors, a typical one charges ${formatMoney(typical)} for a session${
           middle
             ? `, and half of them charge between ${formatMoney(middle.low)} and ${formatMoney(middle.high)}`
             : ""
-        }.${yours ? ` You charge ${formatMoney(yours)}.` : ""}`;
+        }.${yours ? ` You charge ${formatMoney(yours)} for ${sessionsOf}.` : ""}`;
+
+  const dotSentence = drawn.sampled
+    ? `Each dot is one of ${prices.length} mentors spread evenly across the ${drawn.total} we compared you with. Every price is for a whole session.`
+    : `Each dot is one of the ${prices.length} mentors we compared you with. Every price is for a whole session.`;
 
   return (
     <>
+      <p className="mb-6">
+        <TextLink href={back.href}>{back.label}</TextLink>
+      </p>
+
       <div
         className="flex flex-wrap gap-2"
         role="group"
@@ -177,10 +223,11 @@ function SimilarMentors({ serviceId }: { serviceId: number }) {
 
       <p className="mt-5 max-w-prose font-semibold text-ink-900">{sentence}</p>
       <p className="mt-2 max-w-prose text-small text-ink-500">
-        We matched you with {comparables.data.summary.match_description}. Names are not
+        We matched you with {summary.match_description}. Every price on this page is
+        what the mentor charges for a whole session, not per person. Names are not
         shown: this page is about prices, not people.
       </p>
-      {comparables.data.summary.widened ? (
+      {summary.widened ? (
         <p className="mt-2 max-w-prose text-small text-ink-500">{WIDENED_NOTE}</p>
       ) : null}
 
@@ -198,15 +245,17 @@ function SimilarMentors({ serviceId }: { serviceId: number }) {
               scale={scale}
               yours={yours}
               yoursLabel="You"
-              sentence={`Each dot is one of the ${prices.length} mentors we compared you with.`}
-              tableCaption="What each similar mentor charges per session, in AUD"
+              sentence={dotSentence}
+              tableCaption="What each similar mentor charges for a whole session, in AUD"
             />
           </Card>
 
           <Card className="mt-6 overflow-x-auto p-3">
             <table className="w-full border-collapse text-[0.9375rem]">
               <caption className="px-3 py-2 text-left text-small text-ink-500">
-                Similar mentors, cheapest first. No mentor is named.
+                {drawn.sampled
+                  ? `${prices.length} of the ${drawn.total} similar mentors we matched, spread evenly across the price range, cheapest first. No mentor is named.`
+                  : "Similar mentors, cheapest first. No mentor is named."}
               </caption>
               <thead>
                 <tr>
@@ -254,33 +303,55 @@ function SimilarMentors({ serviceId }: { serviceId: number }) {
           </Card>
         </>
       )}
+
+      <p className="mt-8">
+        <TextLink href={back.href}>{back.label}</TextLink>
+      </p>
+    </>
+  );
+}
+
+function SimilarScreen() {
+  const params = useParams<{ serviceId: string }>();
+  const search = useSearchParams();
+  const serviceId = Number.parseInt(params?.serviceId ?? "", 10);
+  const back = backFromOrigin(
+    search?.get(FROM_QUERY),
+    search?.get(RECOMMENDATION_QUERY),
+  );
+
+  return (
+    <>
+      <Banner
+        title="What similar mentors charge"
+        lead="The mentors we compared your price with. Names are not shown."
+      />
+      <Column wide className="py-10">
+        {Number.isInteger(serviceId) ? (
+          <SimilarMentors serviceId={serviceId} back={back} />
+        ) : (
+          <>
+            <ErrorNotice
+              title="We could not find that service"
+              message="That link does not point at a service we hold."
+            />
+            <p className="mt-6">
+              <TextLink href={back.href}>{back.label}</TextLink>
+            </p>
+          </>
+        )}
+      </Column>
     </>
   );
 }
 
 export default function SimilarPage() {
-  const params = useParams<{ serviceId: string }>();
-  const serviceId = Number.parseInt(params?.serviceId ?? "", 10);
-
   return (
     <RequireAuth>
       {() => (
-        <>
-          <Banner
-            title="What similar mentors charge"
-            lead="The mentors we compared your price with. Names are not shown."
-          />
-          <Column wide className="py-10">
-            {Number.isInteger(serviceId) ? (
-              <SimilarMentors serviceId={serviceId} />
-            ) : (
-              <ErrorNotice
-                title="We could not find that service"
-                message="That link does not point at a service we hold."
-              />
-            )}
-          </Column>
-        </>
+        <Suspense fallback={null}>
+          <SimilarScreen />
+        </Suspense>
       )}
     </RequireAuth>
   );

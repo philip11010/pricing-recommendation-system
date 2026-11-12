@@ -18,6 +18,7 @@ leak it as surely as a field would.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -764,9 +765,160 @@ def test_the_built_table_stays_inside_the_range_the_models_support(
 
 @pytest.mark.app_assets
 def test_a_real_match_is_summarised_and_binned(real_comparables):
+    """
+    The bins cover every mentor the chart is drawn from, and no others.
+
+    This used to assert the bins covered the whole match. They cover the
+    spread now, which is the set the summary beside them is also read from:
+    the point of the change was that one screen stopped describing two
+    different populations at once.
+    """
     found = real_comparables.match(field="technology_software", max_mentees=2)
     summary = comparables_module.summarise(found)
+    drawn = comparables_module.spread(found)
 
     assert found.count >= MIN_MATCHES
     assert summary["p25_price"] <= summary["median_price"] <= summary["p75_price"]
-    assert sum(comparables_module.histogram(found)["counts"]) == found.count
+    assert sum(comparables_module.histogram(found)["counts"]) == len(drawn)
+
+
+# ---------------------------------------------------------------------------
+# One screen, one set of mentors
+#
+# The fault these exist for: the frontend drew its points from a page of a
+# cheapest-first sort and its band from the whole match, so the points showed
+# the bottom of the market, the band showed the middle of it, and the mentor's
+# own price sat far to the right of every point. Both now come out of
+# comparables.spread, and these are the tests that keep them there.
+# ---------------------------------------------------------------------------
+@pytest.mark.app_assets
+def test_the_band_is_the_quartiles_of_the_mentors_actually_drawn(real_comparables):
+    """
+    The band edges are the quartiles of the point values, to the unit.
+
+    Not approximately, and not of some other set of mentors: the same
+    function reduces the match once and both figures are read off the result.
+    """
+    for field, mentees in (
+        ("technology_software", 2),
+        ("investment_finance", 4),
+        ("community_social_work", 6),
+    ):
+        found = real_comparables.match(field=field, max_mentees=mentees)
+        summary = comparables_module.summarise(found)
+        drawn = [
+            item["price"] for item in comparables_module.distribution(found)["items"]
+        ]
+
+        assert summary["p25_price"] == int(round(float(np.percentile(drawn, 25))))
+        assert summary["median_price"] == int(round(float(np.percentile(drawn, 50))))
+        assert summary["p75_price"] == int(round(float(np.percentile(drawn, 75))))
+
+
+@pytest.mark.app_assets
+def test_the_drawn_mentors_span_the_whole_match(real_comparables):
+    """
+    The cheapest and the dearest are kept, so the sample is not a trimmed
+    market. A mentor at the top of their field has to be able to see that the
+    chart reaches them.
+    """
+    found = real_comparables.match(field="technology_software", max_mentees=2)
+    drawn = [item["price"] for item in comparables_module.distribution(found)["items"]]
+    every = found.rows["price"].astype(int).tolist()
+
+    assert min(drawn) == min(every)
+    assert max(drawn) == max(every)
+
+
+@pytest.mark.app_assets
+def test_a_large_match_is_reported_as_sampled_and_says_how_many(real_comparables):
+    found = real_comparables.match(field="technology_software", max_mentees=2)
+    drawn = comparables_module.distribution(found)
+
+    assert found.count > comparables_module.SPREAD_POINTS
+    assert drawn["total"] == found.count
+    assert drawn["shown"] == comparables_module.SPREAD_POINTS
+    assert drawn["sampled"] is True
+    assert len(drawn["items"]) == drawn["shown"]
+
+
+def test_a_small_match_is_described_whole(comparables):
+    """
+    Nothing is sampled away from a thinly represented field: the sample is
+    the match, and the frontend is told so, so it does not write a sentence
+    about a spread that was never taken.
+    """
+    found = comparables.match(field="technology_software", max_mentees=4)
+    drawn = comparables_module.distribution(found)
+
+    assert found.count <= comparables_module.SPREAD_POINTS
+    assert drawn["sampled"] is False
+    assert drawn["shown"] == found.count
+    assert drawn["total"] == found.count
+
+
+def test_every_drawn_mentor_carries_the_session_price_and_the_seat_price(
+    comparables,
+):
+    """
+    One unit everywhere, with the per-seat figure beside it rather than
+    instead of it. The price a mentor is compared on is what the session
+    costs, because that is what they charge.
+    """
+    found = comparables.match(field="technology_software", max_mentees=4)
+
+    for item in comparables_module.distribution(found)["items"]:
+        assert item["price"] > 0
+        assert item["price_per_mentee"] == round(item["price"] / item["max_mentees"])
+
+
+@pytest.mark.app_assets
+def test_a_mentors_own_price_lands_among_the_mentors_drawn_beside_it(
+    real_comparables, pricing
+):
+    """
+    The symptom the fault was reported as, stated as a test.
+
+    A suggested price for a group of two, against the mentors a group of two
+    is compared with. It has to land on the same scale as the points: inside
+    their range, or at worst close to one end of it. Before the fix the
+    points were the cheapest sixty of a thousand and a perfectly ordinary
+    suggestion sat a hundred units to the right of all of them.
+    """
+    inputs = mapping.to_model_inputs(
+        field="technology_software",
+        max_mentees=2,
+        min_commitment=mapping.MIN_COMMITMENT_DEFAULT,
+        skills=list(mapping.SKILLS)[:6],
+        profile_verified=False,
+        services_count=1,
+    )
+    suggested = pricing.predict(inputs).recommended_price
+
+    found = real_comparables.match(field="technology_software", max_mentees=2)
+    drawn = [item["price"] for item in comparables_module.distribution(found)["items"]]
+    summary = comparables_module.summarise(found)
+
+    assert min(drawn) <= suggested <= max(drawn)
+    # And not merely inside a very wide range. The suggestion sits in the
+    # body of the market rather than out in either tail, which is the claim
+    # the mentor is actually being shown.
+    assert 5 <= comparables_module.price_percentile(found, suggested) <= 95
+    assert summary["p25_price"] <= suggested <= max(drawn)
+
+
+@pytest.mark.app_assets
+def test_where_a_price_sits_is_measured_against_the_mentors_drawn(real_comparables):
+    """
+    The percentile and the band answer the same question about the same
+    mentors, so a price on the lower quartile reads as about a quarter of the
+    way up rather than as some unrelated number.
+    """
+    found = real_comparables.match(field="technology_software", max_mentees=2)
+    summary = comparables_module.summarise(found)
+
+    at_quarter = comparables_module.price_percentile(found, summary["p25_price"])
+    at_three_quarters = comparables_module.price_percentile(found, summary["p75_price"])
+
+    assert 20 <= at_quarter <= 30
+    assert 70 <= at_three_quarters <= 80

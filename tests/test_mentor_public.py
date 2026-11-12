@@ -50,6 +50,7 @@ CARD_KEYS = {
     "session_label",
     "verified",
     "review_count",
+    "average_rating",
 }
 
 PROFILE_KEYS = CARD_KEYS | {
@@ -142,11 +143,16 @@ def test_a_mentor_who_just_registered_is_listed(client):
     assert card["verified"] is False
 
 
-def test_a_card_carries_nothing_but_the_nine_fields(client):
+def test_a_card_carries_nothing_but_the_fields_named_above(client):
     """
     The assertion this module exists for: the whole key set, not the keys a
     test happens to want. Anything added to the card is a field published to
     anybody who asks.
+
+    The set grew by one: ``average_rating``, which is what mentees rate the
+    mentor overall. It is on the card deliberately, since a rating is the
+    thing a mentee most wants beside a price, and it is the only figure out
+    of a mentor's record that is published here.
     """
     register(client)
 
@@ -259,6 +265,66 @@ def test_a_card_counts_the_mentors_reviews_or_says_none(client, api_sessions):
 
     (card,) = client.get("/mentors").json()["items"]
     assert card["review_count"] == SYNTHETIC_HISTORY["reviews_total"]
+
+
+def test_a_card_carries_the_overall_rating_or_nothing_at_all(client, api_sessions):
+    """
+    Null until there is a rating, and one decimal place once there is.
+
+    The opposite choice to the review count beside it, and deliberately so: a
+    rating of zero would read as a mentor rated badly rather than as a mentor
+    nobody has rated, so the absent case is null and a frontend shows nothing
+    in its place.
+    """
+    from src.db.mentor_models import MentorHistory
+
+    from .conftest import SYNTHETIC_HISTORY
+
+    mentor_id = register(client)["mentor"]["id"]
+    (card,) = client.get("/mentors").json()["items"]
+    assert card["average_rating"] is None
+
+    with api_sessions() as session:
+        session.add(MentorHistory(mentor_id=mentor_id, **SYNTHETIC_HISTORY))
+        session.commit()
+
+    (card,) = client.get("/mentors").json()["items"]
+    assert card["average_rating"] == round(
+        float(SYNTHETIC_HISTORY["rating_overall"]), 1
+    )
+    assert 0 <= card["average_rating"] <= 5
+
+    profile = client.get(f"/mentors/{mentor_id}/public").json()
+    assert profile["average_rating"] == card["average_rating"]
+
+
+def test_a_card_never_carries_a_rating_over_time(client, api_sessions):
+    """
+    One figure, never a series.
+
+    The platform records a mentor's rating as it stands now rather than month
+    by month, so a rating drawn over time would be an invention. The other
+    six ratings in the record are not published at all.
+    """
+    from src.db.mentor_models import MentorHistory
+
+    from .conftest import SYNTHETIC_HISTORY
+
+    mentor_id = register(client)["mentor"]["id"]
+    with api_sessions() as session:
+        session.add(MentorHistory(mentor_id=mentor_id, **SYNTHETIC_HISTORY))
+        session.commit()
+
+    text = client.get(f"/mentors/{mentor_id}/public").text.lower()
+
+    for absent in (
+        "rating_overall",
+        "rating_accuracy",
+        "rating_value",
+        "ratings_by_month",
+        "rating_history",
+    ):
+        assert absent not in text
 
 
 def test_the_directory_lists_the_newest_mentor_first(client):
@@ -437,6 +503,59 @@ def test_a_preview_is_the_price_the_form_will_produce(client):
     assert previewed["range_low"] == registered["price_low"]
     assert previewed["range_high"] == registered["price_high"]
     assert previewed["per_person_price"] == registered["price_per_mentee"]
+
+
+@pytest.mark.parametrize("skills", [0, 1, 4, 12, 30])
+@pytest.mark.parametrize("max_mentees", [1, 5])
+def test_a_preview_agrees_with_registration_at_every_breadth(
+    client, skills, max_mentees
+):
+    """
+    The same claim across the range of the one answer the preview reacts to.
+
+    The price is read off an envelope rather than straight off the model, and
+    an envelope is the kind of thing that is easy to build twice and get
+    slightly different answers from. One test at one skill count would not
+    notice. These walk the answer from nothing ticked to everything, at two
+    group sizes, and the two numbers have to be the same number every time.
+    """
+    chosen = list(mapping.SKILLS)[:skills]
+
+    previewed = preview(client, skills=chosen, max_mentees=max_mentees).json()
+    registered = register(client, skills=chosen, max_mentees=max_mentees)[
+        "recommendation"
+    ]
+
+    assert previewed["session_price"] == registered["recommended_price"]
+    assert previewed["range_low"] == registered["price_low"]
+    assert previewed["range_high"] == registered["price_high"]
+    assert previewed["per_person_price"] == registered["price_per_mentee"]
+
+
+@pytest.mark.parametrize("max_mentees", [1, 3, 8])
+def test_a_preview_never_falls_as_a_skill_is_ticked(client, max_mentees):
+    """
+    What a mentor watching the panel beside the form actually sees.
+
+    The envelope is applied in the prediction service, so this asserts it
+    through the endpoint rather than against the service directly: a
+    correction that worked but was bypassed by this one route would show up
+    here and nowhere else.
+    """
+    every = list(mapping.SKILLS)
+
+    prices = [
+        preview(client, skills=every[:count], max_mentees=max_mentees).json()
+        for count in range(0, len(every) + 1)
+    ]
+
+    for earlier, later in zip(prices, prices[1:], strict=False):
+        assert later["session_price"] >= earlier["session_price"], (
+            earlier,
+            later,
+        )
+        assert later["range_low"] >= earlier["range_low"]
+        assert later["range_high"] >= earlier["range_high"]
 
 
 def test_a_preview_divides_a_group_price_by_the_seats(client):

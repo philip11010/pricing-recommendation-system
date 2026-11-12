@@ -11,9 +11,22 @@
  * Paging is a Load more button rather than numbered pages. The list is read
  * downwards, and a second page that replaced the first would lose where the
  * reader was.
+ *
+ * The chosen field lives in the address rather than in a variable. That is
+ * what lets a reader open a mentor's profile and come back to the list they
+ * were reading rather than to the unfiltered one, and it means the browser's
+ * own back button does the same thing the link does. Choosing a field
+ * replaces the address instead of adding to it, so the back button leaves
+ * the directory rather than stepping back through every filter that was
+ * tried on the way.
+ *
+ * A field in the address is checked against the list of fields before it is
+ * sent anywhere. This page is public, so the address can say anything at
+ * all, and an unknown field is read as no filter rather than passed on.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { MentorCardTile } from "@/components/mentor-card";
 import {
@@ -27,6 +40,7 @@ import {
 import { api } from "@/lib/api-client";
 import type { MentorCard, Option } from "@/lib/api-types";
 import { messageFor } from "@/lib/errors";
+import { FIELD_QUERY, directoryHref } from "@/lib/origin";
 import { useAsync } from "@/lib/use-async";
 
 const PAGE_SIZE = 12;
@@ -62,10 +76,26 @@ function FieldFilters({
   );
 }
 
-export default function MentorsPage() {
+function MentorsDirectory() {
   const options = useAsync((signal) => api.options(signal), "directory-options");
+  const router = useRouter();
+  const search = useSearchParams();
 
-  const [field, setField] = useState("");
+  const asked = search?.get(FIELD_QUERY) ?? "";
+  const fields = options.data?.fields ?? null;
+  // Nothing is sent until the field in the address has been recognised, and
+  // a field that is not one of ours is read as no filter at all.
+  const field =
+    asked && fields ? (fields.some((one) => one.id === asked) ? asked : "") : asked;
+  const waiting = Boolean(asked) && options.status === "loading";
+
+  const setField = useCallback(
+    (chosen: string) => {
+      router.replace(directoryHref(chosen || null), { scroll: false });
+    },
+    [router],
+  );
+
   const [mentors, setMentors] = useState<MentorCard[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -96,6 +126,13 @@ export default function MentorsPage() {
     setLoading(true);
     setFailure(null);
 
+    if (waiting) {
+      return () => {
+        live = false;
+        controller.abort();
+      };
+    }
+
     load(field, 0, controller.signal)
       .then((page) => {
         if (live) {
@@ -116,7 +153,7 @@ export default function MentorsPage() {
       live = false;
       controller.abort();
     };
-  }, [field, load, attempt]);
+  }, [field, load, attempt, waiting]);
 
   async function loadMore() {
     setLoadingMore(true);
@@ -173,7 +210,7 @@ export default function MentorsPage() {
           {!loading && mentors.length > 0 ? (
             <div className="grid gap-6 mid:grid-cols-2 lg:grid-cols-3">
               {mentors.map((mentor) => (
-                <MentorCardTile key={mentor.id} mentor={mentor} />
+                <MentorCardTile key={mentor.id} mentor={mentor} field={field} />
               ))}
             </div>
           ) : null}
@@ -193,5 +230,13 @@ export default function MentorsPage() {
         ) : null}
       </Column>
     </>
+  );
+}
+
+export default function MentorsPage() {
+  return (
+    <Suspense fallback={null}>
+      <MentorsDirectory />
+    </Suspense>
   );
 }

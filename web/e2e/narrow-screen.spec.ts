@@ -59,7 +59,9 @@ test.describe("on a phone", () => {
 
     await page.getByRole("button", { name: "See my suggested price" }).click();
     await expect(page).toHaveURL(/\/recommendation\/\d+$/);
-    await expect(page.getByText("Suggested session price")).toBeVisible();
+    await expect(
+      page.getByText("Suggested session price", { exact: true }),
+    ).toBeVisible();
 
     expect(await hasHorizontalScroll(page)).toBe(false);
     for (const height of await visibleButtonHeights(page)) {

@@ -489,6 +489,17 @@ class MentorCardOut(BaseModel):
             "record on the platform yet."
         )
     )
+    average_rating: float | None = Field(
+        default=None,
+        description=(
+            "What mentees rate this mentor overall, out of five, to one "
+            "decimal place, or null when the platform holds no rating for "
+            "them. Null rather than zero: a mentor nobody has rated yet has "
+            "not been rated badly, and a frontend is expected to show "
+            "nothing at all rather than a zero or a row of empty stars."
+        ),
+        examples=[4.8],
+    )
 
 
 class MentorDirectoryOut(BaseModel):
@@ -888,11 +899,54 @@ class PriceHistogramOut(BaseModel):
     counts: list[int]
 
 
+class PriceDistributionOut(BaseModel):
+    """
+    The comparable mentors a frontend plots and lists, and what they stand for.
+
+    A match can run to a thousand mentors. Drawing all of them is a solid bar
+    of overlapping points, and a table of every one of them is a table nobody
+    reaches the end of, so this is an evenly spread sample by price rank,
+    with the cheapest and the dearest always kept.
+
+    ``total`` is how many mentors were matched and ``shown`` how many are
+    here. Both are reported because a sentence above a chart has to be able to
+    say which number it is talking about, and a sample presented as the whole
+    market would overstate what the chart shows.
+
+    The summary beside this is read from exactly these mentors, so the band
+    drawn around the middle of the group is the quartiles of the points drawn
+    beside it rather than of some other set.
+    """
+
+    total: int = Field(description="How many comparable mentors were matched.")
+    shown: int = Field(description="How many of them are in items below.")
+    sampled: bool = Field(
+        description=(
+            "True when the match was larger than the number shown, so items "
+            "is a spread across it rather than all of it."
+        )
+    )
+    items: list[ComparableItemOut] = Field(
+        description="Cheapest first, by what each mentor charges for a session."
+    )
+
+
 class ComparablesOut(BaseModel):
-    """What mentors like this one charge: the summary, the spread, the rows."""
+    """
+    What mentors like this one charge: the summary, the spread, the rows.
+
+    Two different lists of mentors, for two different questions.
+    ``distribution`` is the comparison: an evenly spread sample of the whole
+    match, which the summary and the histogram are both read from, and the
+    one to plot or tabulate. ``items`` is a page of the match in whatever
+    order was asked for, which is the right answer to "show me the dearest
+    ten" and the wrong one to draw a market from, because the first page of a
+    sort is one end of the market rather than the middle of it.
+    """
 
     summary: ComparablesSummaryOut
     histogram: PriceHistogramOut
+    distribution: PriceDistributionOut
     items: list[ComparableItemOut]
     limit: int
     offset: int
@@ -1200,6 +1254,16 @@ class DashboardOut(BaseModel):
 
     mentor_id: int
     display_name: str
+    average_rating: float | None = Field(
+        default=None,
+        description=(
+            "The mentor's overall rating out of five, to one decimal place, "
+            "or null when there is none. One figure, not a series: the "
+            "platform records a mentor's rating as it stands rather than "
+            "month by month, so there is nothing honest to draw over time."
+        ),
+        examples=[4.8],
+    )
     headline: DashboardHeadlineOut = Field(
         description="The one line the page opens with, about the main service."
     )

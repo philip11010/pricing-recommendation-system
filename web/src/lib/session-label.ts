@@ -70,3 +70,26 @@ export function labelFromId(id: string, rule?: SessionLabelRule | null): string 
   }
   return rule?.one_to_one?.label ?? ONE_TO_ONE_LABEL;
 }
+
+/**
+ * How a session of this size is described inside a sentence.
+ *
+ * "groups of 2" rather than "group", because the sentences these go into
+ * compare one mentor's price with other mentors' prices and the size of the
+ * session is the thing that makes those prices comparable. A reader who is
+ * not told the size has no way to judge whether the comparison is fair.
+ */
+export function groupWords(maxMentees: number, rule?: SessionLabelRule | null): string {
+  return isOneToOne(maxMentees, rule)
+    ? "one to one sessions"
+    : `groups of ${maxMentees}`;
+}
+
+/** The same, capitalised to open a sentence. */
+export function groupWordsLeading(
+  maxMentees: number,
+  rule?: SessionLabelRule | null,
+): string {
+  const words = groupWords(maxMentees, rule);
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}

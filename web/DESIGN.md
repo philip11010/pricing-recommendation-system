@@ -155,18 +155,23 @@ White text, and white pill buttons with an `accent-800` label at 11.42:1.
 | Closing band light end | `#1D4ED8` | 6.70:1 |
 
 Every stop clears 4.5:1 for white body text, so **white text is allowed anywhere
-on the gradient**. The two tinted text colours are not, and that is the one
-restriction:
+on the gradient**. Tinted text is not, and that is the one restriction:
 
-- `#E0E7FF` lead paragraph: 10.60:1 on `#1E1B8F`, 6.41:1 on `#4338CA`, but
-  **4.19:1 on `#2563EB`**, which fails.
 - `#C7D2FE` fine print: 8.75:1 on `#1E1B8F`, 5.30:1 on `#4338CA`, but
   **3.46:1 on `#2563EB`**, which fails.
 
-**Restriction.** Tinted text sits on the dark indigo area of the gradient only,
-which in practice is the left and upper part of the hero and the whole of the
-slim banner. Any text that would travel into the blue end of the gradient is
-white, or it moves onto a card.
+**The lead paragraph on a gradient is white**, on the landing hero, on log in,
+on the price hero and in the slim banner. It used to be `#E0E7FF`, which
+measured 10.60:1 on `#1E1B8F` and 6.41:1 on `#4338CA` but **4.19:1 on
+`#2563EB`**, and which stop a given line of it sat on depended on how wide the
+window was: the same paragraph passed on a phone and failed on a wide screen.
+White is the only colour here that does not have to be re-argued per width, and
+the lead is the longest piece of text on any of these screens.
+
+**Restriction.** The fine print tint sits on the dark indigo area of the
+gradient only, which in practice is the left and upper part of the hero and the
+whole of the slim banner. Any other text that would travel into the blue end of
+the gradient is white, or it moves onto a card.
 
 **Soft tints** for content cards on calm screens and for the landing step cards.
 Always with ink text, never with white text, and never behind a chart.

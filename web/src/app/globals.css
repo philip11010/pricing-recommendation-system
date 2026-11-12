@@ -43,8 +43,14 @@
   --tint-violet: #ede9fe;
   --tint-cyan: #cffafe;
 
-  /* Text on the gradient. The tinted two stay on the dark indigo area. */
-  --on-gradient-lead: #e0e7ff;
+  /* Text on the gradient.
+     The lead paragraph is white. It used to be a tint, which measured well
+     on the indigo end and failed on the blue end, and which end a line of
+     the lead sat on depended on how wide the window was. White clears 4.5:1
+     on every stop of every gradient here, so it is the one colour that does
+     not have to be argued about per width. The fine print is still tinted
+     and still restricted to the dark indigo area. */
+  --on-gradient-lead: #ffffff;
   --on-gradient-fine: #c7d2fe;
   --gradient-dark: #1e1b8f;
 

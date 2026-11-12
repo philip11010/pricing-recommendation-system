@@ -83,7 +83,10 @@ function LoginForm() {
       const answer = await api.login({ email: email.trim(), password });
       writeToken(answer.access_token);
       setMentor(answer.mentor);
-      router.push("/dashboard");
+      // Replace rather than push: the browser's back button out of the
+      // dashboard should leave the application, not return a signed in
+      // mentor to the log in form they have just finished with.
+      router.replace("/dashboard");
     } catch (error) {
       setFailure(
         error instanceof ApiError && error.status === 401

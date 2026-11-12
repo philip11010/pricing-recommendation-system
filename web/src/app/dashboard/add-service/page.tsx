@@ -80,7 +80,9 @@ function AddServiceForm({
         min_commitment: options.min_commitment_default,
         skills,
       });
-      router.push(`/recommendation/${created.recommendation.id}`);
+      // Replace rather than push: the service exists now, and going back to
+      // the form would offer to add the same one a second time.
+      router.replace(`/recommendation/${created.recommendation.id}`);
     } catch (error) {
       if (error instanceof ApiError) {
         const mapped = toFieldErrors(error.fieldErrors, error.detail);

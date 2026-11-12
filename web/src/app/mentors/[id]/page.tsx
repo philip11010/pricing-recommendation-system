@@ -7,9 +7,16 @@
  * they chose to add about themselves. Nothing private, and nothing a model
  * reads: the three optional fields here are profile text and are never part
  * of a price.
+ *
+ * The way back keeps whatever field the directory was filtered to, which
+ * arrives in the address from the card that was clicked. A reader who had
+ * narrowed the list to one field and came back to all of it would have to
+ * narrow it again, and the link is there to prevent exactly that.
  */
 
-import { useParams } from "next/navigation";
+import { Suspense } from "react";
+
+import { useParams, useSearchParams } from "next/navigation";
 
 import { MentorCardTile } from "@/components/mentor-card";
 import {
@@ -23,11 +30,15 @@ import {
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
 import { isNotFound, messageFor } from "@/lib/errors";
+import { FIELD_QUERY, directoryHref } from "@/lib/origin";
 import { useAsync } from "@/lib/use-async";
 
-export default function PublicProfilePage() {
+function PublicProfile() {
   const params = useParams<{ id: string }>();
+  const search = useSearchParams();
   const mentorId = Number.parseInt(params?.id ?? "", 10);
+  const field = search?.get(FIELD_QUERY) ?? null;
+  const backToMentors = directoryHref(field);
 
   const { status, data, error, reload } = useAsync(
     (signal) => api.publicMentor(mentorId, signal),
@@ -53,7 +64,7 @@ export default function PublicProfilePage() {
       />
       <Column className="py-10">
         <p className="mb-6">
-          <TextLink href="/mentors">Back to all mentors</TextLink>
+          <TextLink href={backToMentors}>Back to mentors</TextLink>
         </p>
 
         {!Number.isInteger(mentorId) ? (
@@ -127,5 +138,13 @@ export default function PublicProfilePage() {
         ) : null}
       </Column>
     </>
+  );
+}
+
+export default function PublicProfilePage() {
+  return (
+    <Suspense fallback={null}>
+      <PublicProfile />
+    </Suspense>
   );
 }

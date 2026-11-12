@@ -16,6 +16,8 @@ import {
   GROUP_LABEL,
   ONE_TO_ONE,
   ONE_TO_ONE_LABEL,
+  groupWords,
+  groupWordsLeading,
   isOneToOne,
   labelFromId,
   sessionLabel,
@@ -81,5 +83,22 @@ describe("labelFromId", () => {
 
   it("reads an unknown id as the safer of the two", () => {
     expect(labelFromId("something_else", RULE)).toBe("One to one");
+  });
+});
+
+describe("groupWords", () => {
+  it("names the size of the session the prices are being compared at", () => {
+    expect(groupWords(4, RULE)).toBe("groups of 4");
+    expect(groupWords(1, RULE)).toBe("one to one sessions");
+  });
+
+  it("opens a sentence with a capital", () => {
+    expect(groupWordsLeading(4, RULE)).toBe("Groups of 4");
+    expect(groupWordsLeading(1, RULE)).toBe("One to one sessions");
+  });
+
+  it("works before the rule has been loaded", () => {
+    expect(groupWords(1)).toBe("one to one sessions");
+    expect(groupWords(6)).toBe("groups of 6");
   });
 });

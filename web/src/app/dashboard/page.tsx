@@ -10,7 +10,11 @@
  * cannot measure would be an invention.
  *
  * Four statistics, a sentence with the ladder under it, one chart, and the
- * table of services with what the mentor decided about each price.
+ * table of services with what the mentor decided about each price. A fifth
+ * statistic appears only when the platform holds an overall rating for the
+ * mentor: a mentor nobody has rated has not been rated badly, so there is no
+ * card in its place rather than a card reading zero. It is one figure and
+ * never a series, for the same reason as the charts above.
  */
 
 import { ReviewsChart } from "@/components/reviews-chart";
@@ -27,6 +31,7 @@ import {
   ErrorNotice,
   LoadingBlock,
   Statistic,
+  TextLink,
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
 import type { Activity, Dashboard, Mentor } from "@/lib/api-types";
@@ -38,7 +43,8 @@ import {
 } from "@/lib/charts";
 import { COMPARABLES_UNAVAILABLE_NOTE, decisionWord } from "@/lib/copy";
 import { messageFor } from "@/lib/errors";
-import { formatMoney } from "@/lib/format";
+import { similarHref } from "@/lib/origin";
+import { formatMoney, formatRating } from "@/lib/format";
 import { useAsync } from "@/lib/use-async";
 
 function firstNameOf(name: string): string {
@@ -72,9 +78,12 @@ function HeadlineStatistics({
 }) {
   const headline = dashboard.headline;
   const main = dashboard.services[0] ?? null;
+  const rated = dashboard.average_rating !== null;
 
   return (
-    <div className="grid gap-6 mid:grid-cols-2 lg:grid-cols-4">
+    <div
+      className={`grid gap-6 mid:grid-cols-2 ${rated ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}
+    >
       <Statistic
         label="Your price now"
         value={headline.your_price ? formatMoney(headline.your_price) : "Not set yet"}
@@ -99,6 +108,13 @@ function HeadlineStatistics({
             : "no comparison on this server"
         }
       />
+      {rated ? (
+        <Statistic
+          label="Average rating"
+          value={formatRating(dashboard.average_rating)}
+          note="what mentees rate you overall"
+        />
+      ) : null}
       <Statistic
         label="Reviews this year"
         value={activity?.has_history ? String(stats.recent) : "None yet"}
@@ -267,17 +283,22 @@ function ServicesTable({ dashboard }: { dashboard: Dashboard }) {
           </caption>
           <thead>
             <tr>
-              {["Service", "People", "Your price", "Suggested", "Decision"].map(
-                (column) => (
-                  <th
-                    key={column}
-                    scope="col"
-                    className="border-b border-line px-3 py-2.5 text-left text-overline uppercase text-ink-500"
-                  >
-                    {column}
-                  </th>
-                ),
-              )}
+              {[
+                "Service",
+                "People",
+                "Your price",
+                "Suggested",
+                "Decision",
+                "Compare",
+              ].map((column) => (
+                <th
+                  key={column}
+                  scope="col"
+                  className="border-b border-line px-3 py-2.5 text-left text-overline uppercase text-ink-500"
+                >
+                  {column}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -328,6 +349,15 @@ function ServicesTable({ dashboard }: { dashboard: Dashboard }) {
                     ) : (
                       <Chip tone="neutral">{decisionWord(action)}</Chip>
                     )}
+                  </td>
+                  {/* The origin travels with the link, so the page it opens
+                      offers a way back here rather than to a fresh price. */}
+                  <td className="border-b border-line px-3 py-3">
+                    <TextLink
+                      href={similarHref(service.service_id, { from: "dashboard" })}
+                    >
+                      See similar mentors
+                    </TextLink>
                   </td>
                 </tr>
               );

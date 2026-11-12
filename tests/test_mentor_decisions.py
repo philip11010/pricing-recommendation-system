@@ -948,3 +948,20 @@ def test_the_dashboard_works_for_a_mentor_with_a_track_record(client, api_sessio
     assert payload["headline"]["your_price"] == priced["recommended_price"]
     assert payload["headline"]["sentence"]
     assert payload["totals"]["decision_counts"]["accepted"] == 1
+    assert payload["average_rating"] == round(
+        float(SYNTHETIC_HISTORY["rating_overall"]), 1
+    )
+
+
+def test_the_dashboard_has_no_rating_for_a_mentor_without_a_record(client):
+    """
+    Null rather than zero, so the page can leave the card out entirely.
+
+    A mentor who has not been rated has not been rated badly, and a zero on
+    their own page would read as the second of those.
+    """
+    body = register(client)
+
+    payload = dashboard(client, body["mentor"]["id"])
+
+    assert payload["average_rating"] is None

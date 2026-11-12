@@ -148,6 +148,13 @@ export interface MentorCard {
   session_label: string;
   verified: boolean;
   review_count: number;
+  /**
+   * What mentees rate this mentor overall, out of five, to one decimal
+   * place, or null when the platform holds no rating for them. Null rather
+   * than zero: a mentor nobody has rated has not been rated badly, so
+   * nothing at all is shown in its place. One figure, never a series.
+   */
+  average_rating: number | null;
 }
 
 export interface MentorDirectory {
@@ -254,9 +261,33 @@ export interface ComparableItem {
   reviews_total: number;
 }
 
+/**
+ * The comparable mentors a chart is drawn from, and what they stand for.
+ *
+ * An evenly spread sample of the whole match by price rank, keeping the
+ * cheapest and the dearest. `total` is how many mentors were matched and
+ * `shown` how many are here, so a sentence above a chart can say which of the
+ * two it means. The summary beside it is read from exactly these mentors, so
+ * the band around the middle of the group is the quartiles of the points
+ * drawn next to it.
+ */
+export interface PriceDistribution {
+  total: number;
+  shown: number;
+  sampled: boolean;
+  items: ComparableItem[];
+}
+
 export interface ComparablesResponse {
   summary: ComparablesSummary;
   histogram: PriceHistogram;
+  /** What to plot and tabulate: the whole match, evenly reduced. */
+  distribution: PriceDistribution;
+  /**
+   * A page of the match in whatever order was asked for. Right for "show me
+   * the dearest ten", wrong for describing a market: the first page of a sort
+   * is one end of it.
+   */
   items: ComparableItem[];
   limit: number;
   offset: number;
@@ -346,6 +377,8 @@ export interface DashboardHeadline {
 export interface Dashboard {
   mentor_id: number;
   display_name: string;
+  /** The mentor's overall rating out of five, or null when there is none. */
+  average_rating: number | null;
   headline: DashboardHeadline;
   currency: string;
   comparables_available: boolean;

@@ -4,6 +4,9 @@
  * Verified and not yet verified are the same card otherwise: the chip states
  * which it is in words beside its own icon, so a new mentor is listed on the
  * same terms as anybody else rather than looking like an incomplete one.
+ *
+ * The card carries whatever field the list it sits in was filtered to, so
+ * the profile it opens can offer a way back to that same list.
  */
 
 import Link from "next/link";
@@ -11,7 +14,8 @@ import Link from "next/link";
 import { CheckIcon, Chip } from "@/components/ui";
 import type { MentorCard as MentorCardData } from "@/lib/api-types";
 import { UNVERIFIED_LABEL, VERIFIED_LABEL } from "@/lib/copy";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatRating } from "@/lib/format";
+import { mentorHref } from "@/lib/origin";
 import { initialsOf } from "@/components/site-header";
 
 /** The four soft tints, chosen by id so a card keeps its colour. */
@@ -21,7 +25,14 @@ export function groupLabel(maxMentees: number): string {
   return maxMentees <= 1 ? "One to one" : `Group of ${maxMentees}`;
 }
 
-export function MentorCardTile({ mentor }: { mentor: MentorCardData }) {
+export function MentorCardTile({
+  mentor,
+  field,
+}: {
+  mentor: MentorCardData;
+  /** The field the list was filtered to, kept so the way back keeps it too. */
+  field?: string | null;
+}) {
   const tint = TINTS[mentor.id % TINTS.length];
   return (
     <article className="flex min-w-0 flex-col gap-3 rounded-card border border-line bg-surface p-6">
@@ -35,7 +46,7 @@ export function MentorCardTile({ mentor }: { mentor: MentorCardData }) {
         <div className="min-w-0">
           <p className="font-bold leading-tight">
             <Link
-              href={`/mentors/${mentor.id}`}
+              href={mentorHref(mentor.id, field)}
               className="underline-offset-[3px] hover:underline"
             >
               {mentor.display_name}
@@ -65,11 +76,20 @@ export function MentorCardTile({ mentor }: { mentor: MentorCardData }) {
             {groupLabel(mentor.max_mentees)} session
           </p>
         </div>
-        <p className="text-small text-ink-500">
-          {mentor.review_count > 0
-            ? `${mentor.review_count} reviews`
-            : "No reviews yet"}
-        </p>
+        {/* A mentor nobody has rated has not been rated badly, so an absent
+            rating shows nothing at all rather than a zero or empty stars. */}
+        <div className="text-right">
+          {mentor.average_rating !== null ? (
+            <p className="text-small font-semibold text-ink-700">
+              {formatRating(mentor.average_rating)}
+            </p>
+          ) : null}
+          <p className="text-small text-ink-500">
+            {mentor.review_count > 0
+              ? `${mentor.review_count} reviews`
+              : "No reviews yet"}
+          </p>
+        </div>
       </div>
     </article>
   );

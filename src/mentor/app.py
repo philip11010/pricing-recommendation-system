@@ -97,6 +97,7 @@ from src.mentor.schemas import (
     OptionsOut,
     PreviewInput,
     PreviewOut,
+    PriceDistributionOut,
     PriceHistogramOut,
     PublicMentorOut,
     RecommendationHistoryOut,
@@ -848,6 +849,34 @@ def review_count_of(mentor: Mentor) -> int:
     return int(record.reviews_total)
 
 
+def average_rating_of(mentor: Mentor) -> float | None:
+    """
+    What mentees rate this mentor overall, out of five, or null.
+
+    Null rather than zero, and the opposite choice to the review count above,
+    because the two numbers read differently. "No reviews yet" and "zero
+    reviews" say the same thing; a rating of zero says the mentor was rated
+    and rated badly, which is not what an absent rating means. A frontend
+    shows nothing at all in that case.
+
+    One decimal place, because that is the precision the figure deserves: a
+    rating carried to several decimals invites a mentor to read a difference
+    that no mentee intended. Anything outside the scale is dropped rather
+    than clamped, since a value off the scale means the record is wrong
+    rather than extreme.
+
+    One figure, never a series. The platform records a mentor's rating as it
+    stands now, so a rating drawn month by month would be invented.
+    """
+    record = mentor.history
+    if record is None or record.rating_overall is None:
+        return None
+    value = float(record.rating_overall)
+    if not 0.0 <= value <= 5.0:
+        return None
+    return round(value, 1)
+
+
 def mentor_card(mentor: Mentor, service: Service) -> dict[str, Any]:
     """
     One mentor and their main service, as the directory shows them.
@@ -867,6 +896,7 @@ def mentor_card(mentor: Mentor, service: Service) -> dict[str, Any]:
         "session_label": service.session_label,
         "verified": bool(mentor.verified),
         "review_count": review_count_of(mentor),
+        "average_rating": average_rating_of(mentor),
     }
 
 
@@ -1578,6 +1608,7 @@ async def read_comparables(
     return ComparablesOut(
         summary=ComparablesSummaryOut(**comparables_module.summarise(found)),
         histogram=PriceHistogramOut(**comparables_module.histogram(found)),
+        distribution=PriceDistributionOut(**comparables_module.distribution(found)),
         items=[
             ComparableItemOut(**comparables_module.as_item(row))
             for _, row in page.iterrows()
@@ -2109,6 +2140,7 @@ async def read_dashboard(
     return DashboardOut(
         mentor_id=mentor.id,
         display_name=mentor.full_name,
+        average_rating=average_rating_of(mentor),
         headline=headline_of(
             mentor, mentor.services[0] if mentor.services else None, table
         ),

@@ -44,6 +44,8 @@ import {
   decisionWord,
 } from "@/lib/copy";
 import { isNotFound, isUnprepared, messageFor } from "@/lib/errors";
+import { similarHref } from "@/lib/origin";
+import { groupWords } from "@/lib/session-label";
 import { formatMoney } from "@/lib/format";
 import { useAsync } from "@/lib/use-async";
 
@@ -91,18 +93,30 @@ function Comparisons({ recommendation }: { recommendation: Recommendation }) {
     );
   }
 
-  const prices = items.map((item) => item.price);
-  const scale = priceScale([
-    ...prices,
-    summary.p25_price,
-    summary.p75_price,
-    recommendation.recommended_price,
-  ]);
+  /*
+   * Both charts are drawn from one set of mentors.
+   *
+   * The distribution is the whole match, evenly reduced by the API. The band
+   * is the quartiles of those same mentors, and the "You" marker is the
+   * suggested price, which is a price for a whole session exactly as every
+   * dot is. Drawing the dots from a page of a cheapest-first sort, as this
+   * used to, put the bottom of the market under a band describing all of it.
+   */
+  const drawn = data?.distribution ?? null;
+  const prices = (drawn?.items ?? items).map((item) => item.price);
+  const sessionsOf = groupWords(recommendation.max_mentees);
 
   const band =
     summary.p25_price !== null && summary.p75_price !== null
       ? { low: summary.p25_price, high: summary.p75_price }
       : null;
+
+  const scale = priceScale([
+    ...prices,
+    band?.low ?? null,
+    band?.high ?? null,
+    recommendation.recommended_price,
+  ]);
 
   const inside =
     band !== null &&
@@ -111,11 +125,15 @@ function Comparisons({ recommendation }: { recommendation: Recommendation }) {
 
   const ladderSentence = band
     ? inside
-      ? `Your suggested price is in the middle of what similar mentors charge. Most of them charge between ${formatMoney(band.low)} and ${formatMoney(band.high)}.`
+      ? `Your suggested price is in the middle of what similar mentors charge for ${sessionsOf}. Most of them charge between ${formatMoney(band.low)} and ${formatMoney(band.high)} for the session.`
       : recommendation.recommended_price < band.low
-        ? `Your suggested price is below the middle of what similar mentors charge, which is ${formatMoney(band.low)} to ${formatMoney(band.high)}.`
-        : `Your suggested price is above the middle of what similar mentors charge, which is ${formatMoney(band.low)} to ${formatMoney(band.high)}.`
+        ? `Your suggested price is below the middle of what similar mentors charge for ${sessionsOf}, which is ${formatMoney(band.low)} to ${formatMoney(band.high)} for the session.`
+        : `Your suggested price is above the middle of what similar mentors charge for ${sessionsOf}, which is ${formatMoney(band.low)} to ${formatMoney(band.high)} for the session.`
     : `We have ${summary.count} similar mentors to compare you with, but not enough of them to say where the middle sits.`;
+
+  const dotSentence = drawn?.sampled
+    ? `${summary.match_description}. Each dot is one of ${drawn.shown} mentors spread evenly across the ${drawn.total} we compared you with, and each price is for a whole session.`
+    : `${summary.match_description}. Each dot is one of the ${prices.length} mentors we compared you with, and each price is for a whole session.`;
 
   return (
     <div className="grid gap-6 wide:grid-cols-2">
@@ -128,7 +146,7 @@ function Comparisons({ recommendation }: { recommendation: Recommendation }) {
             bandHigh={band?.high ?? null}
             suggested={recommendation.recommended_price}
             sentence={ladderSentence}
-            tableCaption="Where the suggested price sits, in AUD"
+            tableCaption={`Where the suggested session price sits against similar mentors with ${sessionsOf}, in AUD`}
           />
         </div>
         {summary.widened ? (
@@ -147,17 +165,27 @@ function Comparisons({ recommendation }: { recommendation: Recommendation }) {
               scale={scale}
               yours={recommendation.recommended_price}
               yoursLabel="You"
-              sentence={`${summary.match_description}. Each dot is one of the ${prices.length} we compared you with.`}
-              tableCaption="What each similar mentor charges per session, in AUD"
+              sentence={dotSentence}
+              tableCaption={`What each similar mentor charges for a whole session with ${sessionsOf}, in AUD`}
             />
           ) : (
             <p className="mt-2 text-ink-700">{NO_COMPARABLES_NOTE}</p>
           )}
         </div>
-        <p className="mt-4">
-          <TextLink href={`/similar/${recommendation.service_id}`}>
+        {/* The origin travels with the link, so the page it opens can offer
+            a way back to this exact price rather than to a fresh one. */}
+        <p className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
+          <TextLink
+            href={similarHref(recommendation.service_id, {
+              from: "recommendation",
+              recommendationId: recommendation.id,
+            })}
+          >
             See all similar mentors
           </TextLink>
+          {/* A way out of this screen that does not need the header, and
+              does not ask for a fresh price on the way. */}
+          <TextLink href="/dashboard">Back to your dashboard</TextLink>
         </p>
       </Card>
     </div>
@@ -281,7 +309,10 @@ function PriceScreen({ mentor }: { mentor: Mentor }) {
                 recommendation={recommendation}
                 onDecided={() => {
                   setAnswered(true);
-                  router.push("/dashboard");
+                  // Replace rather than push: the price has been answered,
+                  // and going back to it would show three buttons that no
+                  // longer decide anything.
+                  router.replace("/dashboard");
                 }}
               />
             )}

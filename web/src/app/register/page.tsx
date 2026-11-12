@@ -215,7 +215,10 @@ function Registration({ options }: { options: OptionsResponse }) {
       });
       writeToken(answer.access_token);
       setMentor(answer.mentor);
-      router.push(`/recommendation/${answer.recommendation.id}`);
+      // Replace rather than push: the form has been submitted and the
+      // account exists, so going back to it would offer to register the same
+      // mentor again.
+      router.replace(`/recommendation/${answer.recommendation.id}`);
     } catch (error) {
       const mapped =
         error instanceof ApiError

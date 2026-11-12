@@ -51,6 +51,8 @@ test("a second service gets its own price", async ({ page }) => {
 
   await page.getByRole("button", { name: "See the suggested price" }).click();
   await expect(page).toHaveURL(/\/recommendation\/\d+$/);
-  await expect(page.getByText("Suggested session price")).toBeVisible();
+  await expect(
+    page.getByText("Suggested session price", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("AUD, group of 3")).toBeVisible();
 });
