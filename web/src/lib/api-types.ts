@@ -290,6 +290,20 @@ export interface PriceDistribution {
  * about a mentor with a record. Those are patterns among mentors who charge
  * alike rather than things the mentor did, and the sentence says so.
  */
+/**
+ * One measured theme behind a grouped row.
+ *
+ * A row about a mentor's record may stand for more than one thing. These are
+ * the parts of it, shown in the numbers table rather than in the row itself,
+ * so that saying two things in one sentence never amounts to hiding either
+ * number.
+ */
+export interface FactorPart {
+  key: string;
+  label: string;
+  effect_pct: number;
+}
+
 export interface PriceFactor {
   key: string;
   label: string;
@@ -297,6 +311,7 @@ export interface PriceFactor {
   effect_pct: number;
   sentence: string;
   association: boolean;
+  components: FactorPart[];
 }
 
 export interface PriceDifference {
@@ -328,6 +343,8 @@ export interface Explanation {
   currency: string;
   baseline_price: number;
   baseline_sentence: string;
+  /** The line between the typical price and the rows that move it. */
+  summary_sentence: string;
   suggested_price: number;
   factors: PriceFactor[];
   other_small_effects: PriceFactor | null;
@@ -433,6 +450,22 @@ export interface DashboardHeadline {
   currency: string;
 }
 
+/**
+ * How booked a mentor is, beside the mentors they are compared with.
+ *
+ * Null for a mentor the platform has not measured, which is every new one.
+ * A share invented for them would be the only figure on the page nobody
+ * observed, so the card goes rather than showing a zero.
+ */
+export interface DemandComparison {
+  position: "above" | "below" | "similar";
+  booked_percent: number;
+  typical_booked_percent: number;
+  difference_points: number;
+  compared_with: number;
+  sentence: string;
+}
+
 export interface Dashboard {
   mentor_id: number;
   display_name: string;
@@ -441,6 +474,7 @@ export interface Dashboard {
   headline: DashboardHeadline;
   currency: string;
   comparables_available: boolean;
+  demand: DemandComparison | null;
   totals: DashboardTotals;
   services: DashboardService[];
 }

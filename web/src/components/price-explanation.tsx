@@ -168,8 +168,12 @@ function Account({ explanation }: { explanation: Explanation }) {
 
   return (
     <>
-      <p className="max-w-prose font-semibold text-ink-900">
-        {explanation.baseline_sentence}
+      <p className="max-w-prose text-ink-700">{explanation.baseline_sentence}</p>
+      {/* The line that places the suggestion against that typical price,
+          directly above the rows that move it, so a reader knows which
+          direction the list below is working in before they start it. */}
+      <p className="mt-2 max-w-prose font-semibold text-ink-900 tabular">
+        {explanation.summary_sentence}
       </p>
 
       <ul className="mt-4" aria-label={FACTORS_LABEL}>
@@ -192,23 +196,23 @@ function Account({ explanation }: { explanation: Explanation }) {
       </p>
 
       <DataDisclosure
-        caption="How the suggested price is reached, in AUD"
+        caption="From a typical mentor's price to yours, in AUD"
         summaryLabel="View the numbers"
         columns={["Line", "Effect", "Running total"]}
         rows={[
           [
-            "Starting point",
+            "A typical mentor's price",
             "",
             <span key="start" className="tabular">
               {formatMoney(explanation.baseline_price)}
             </span>,
           ],
-          ...rows.map((factor, index) => {
+          ...rows.flatMap((factor, index) => {
             const running = reconciledPrice(
               explanation.baseline_price,
               rows.slice(0, index + 1),
             );
-            return [
+            const line = [
               factor.label,
               <span key={`${factor.key}-effect`} className="tabular">
                 {describeEffect(factor)}
@@ -217,9 +221,24 @@ function Account({ explanation }: { explanation: Explanation }) {
                 {formatMoney(Math.round(running))}
               </span>,
             ];
+            // A row that stands for more than one measured thing lists those
+            // things under itself. The sentence above groups them; this is
+            // where the numbers behind the grouping stay readable.
+            return [
+              line,
+              ...factor.components.map((part) => [
+                <span key={`${part.key}-label`} className="pl-4 text-ink-500">
+                  {part.label}
+                </span>,
+                <span key={`${part.key}-effect`} className="tabular text-ink-500">
+                  {formatEffect(part.effect_pct)}
+                </span>,
+                "",
+              ]),
+            ];
           }),
           [
-            "Suggested price",
+            "Our suggestion",
             "",
             <span key="final" className="tabular font-semibold">
               {formatMoney(explanation.suggested_price)}

@@ -22,6 +22,23 @@ const LIMITATION =
 const PROFILE_NOTE =
   "Experience and credentials appear on your public card. They do not change this suggestion.";
 
+/**
+ * The card, once it holds an account rather than a skeleton.
+ *
+ * The account arrives in a request of its own, so the heading is on the page
+ * before the rows are. Counting rows or reading text does not wait on its
+ * own in Playwright, and a test that did either straight after the heading
+ * appeared would be reading the loading state and calling it a result.
+ */
+async function readyCard(page: Page) {
+  const card = page.getByRole("region", { name: CARD });
+  await expect(card.getByRole("heading", { name: CARD })).toBeVisible();
+  await expect(
+    card.getByRole("list", { name: "What moved your price" }).locator("> li").first(),
+  ).toBeVisible();
+  return card;
+}
+
 /** Every signed percentage in the list of what moved the price, in order. */
 async function shownEffects(page: Page): Promise<number[]> {
   const rows = await page
@@ -45,14 +62,13 @@ function moneyIn(text: string): number {
   return Number((found as RegExpMatchArray)[1].replace(/,/g, ""));
 }
 
-test("a new mentor is told why, in at most five rows plus the small ones", async ({
+test("a new mentor is told why, in a short list plus the small ones", async ({
   page,
 }) => {
   await requireApi({ comparables: true });
 
   await registerMentor(page);
-  const card = page.getByRole("region", { name: CARD });
-  await expect(card.getByRole("heading", { name: CARD })).toBeVisible();
+  const card = await readyCard(page);
 
   const rows = card
     .getByRole("list", { name: "What moved your price" })
@@ -63,7 +79,9 @@ test("a new mentor is told why, in at most five rows plus the small ones", async
   const gathered = await rows.filter({ hasText: "Other small effects" }).count();
 
   expect(count).toBeGreaterThan(0);
-  expect(count - gathered).toBeLessThanOrEqual(5);
+  // Five, or up to seven where five would have left the gathered row larger
+  // than a row above it.
+  expect(count - gathered).toBeLessThanOrEqual(7);
   expect(gathered).toBeLessThanOrEqual(1);
 
   // Every row says which way it goes in words, not in a colour.
@@ -84,10 +102,10 @@ test("the effects shown come to the price shown", async ({ page }) => {
   await requireApi({ comparables: true });
 
   await registerMentor(page);
-  const card = page.getByRole("region", { name: CARD });
+  const card = await readyCard(page);
 
   const baseline = Number(
-    ((await card.getByText(/starts around/).textContent()) ?? "")
+    ((await card.getByText(/A typical mentor's price is around/).textContent()) ?? "")
       .replace(/,/g, "")
       .match(/(\d+)/)?.[1],
   );
@@ -107,9 +125,9 @@ test("the numbers behind the card open as a real table", async ({ page }) => {
   await requireApi({ comparables: true });
 
   await registerMentor(page);
-  const card = page.getByRole("region", { name: CARD });
+  const card = await readyCard(page);
   const table = card.getByRole("group", {
-    name: "How the suggested price is reached, in AUD",
+    name: "From a typical mentor's price to yours, in AUD",
   });
 
   await expect(table).not.toBeVisible();
@@ -122,10 +140,10 @@ test("the numbers behind the card open as a real table", async ({ page }) => {
   // By cell and exact: the caption says "the suggested price is reached",
   // so a loose text match for the row label finds the caption as well.
   await expect(
-    table.getByRole("cell", { name: "Starting point", exact: true }),
+    table.getByRole("cell", { name: "A typical mentor's price", exact: true }),
   ).toBeVisible();
   await expect(
-    table.getByRole("cell", { name: "Suggested price", exact: true }),
+    table.getByRole("cell", { name: "Our suggestion", exact: true }),
   ).toBeVisible();
 });
 
@@ -207,4 +225,56 @@ test("the card fits a phone", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
   await expect(page.getByRole("region", { name: CARD })).toBeVisible();
   expect(await hasHorizontalScroll(page)).toBe(false);
+});
+
+test("the card opens with a typical price and where this one sits against it", async ({
+  page,
+}) => {
+  await requireApi({ comparables: true });
+
+  await registerMentor(page);
+  const card = await readyCard(page);
+
+  // Not moneyIn: this line writes the amount as "386 AUD" rather than with a
+  // currency symbol, which is how every price in a sentence is written here.
+  const typical = Number(
+    ((await card.getByText(/A typical mentor's price is around/).textContent()) ?? "")
+      .replace(/,/g, "")
+      .match(/(\d+)/)?.[1],
+  );
+  const summary = (await card.getByText(/Here is what moves it:/).textContent()) ?? "";
+
+  expect(summary).toMatch(/We suggest/);
+  expect(summary).toMatch(/percent (above|below) that typical price|about the same as/);
+  expect(typical).toBeGreaterThan(0);
+});
+
+test("a group of more than one is never described against a one to one", async ({
+  page,
+}) => {
+  await requireApi({ comparables: true });
+
+  // Registered with a group, so any sentence naming a one to one session
+  // would be describing a service this mentor does not offer.
+  await registerMentor(page, { maxMentees: 3 });
+  const card = await readyCard(page);
+
+  const said = (await card.textContent()) ?? "";
+
+  expect(said.toLowerCase()).not.toContain("one to one");
+  expect(said).toMatch(/typical group of \d+ among similar mentors/);
+});
+
+test("a new mentor is shown no demand card on their own page", async ({ page }) => {
+  await requireApi({ comparables: true });
+
+  // Nothing has been measured about them, so there is nothing to compare.
+  // An empty card reading zero per cent would be a claim nobody observed.
+  await registerMentor(page);
+  await page.goto("/dashboard");
+  await expect(page.getByRole("heading", { name: /^Hello, / })).toBeVisible();
+
+  await expect(page.getByRole("region", { name: "Demand for your time" })).toHaveCount(
+    0,
+  );
 });

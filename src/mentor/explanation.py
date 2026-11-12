@@ -37,6 +37,7 @@ thing causes another, because nothing here measured that.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from src.mentor import comparables as comparables_module
@@ -62,6 +63,15 @@ SMALL_EFFECT_PCT = 2
 
 # At most five rows before the small ones, which is as many as anybody reads.
 MAX_FACTORS = 5
+
+# Unless five rows would leave a grouped row larger than the smallest row on
+# show. A reader who sees "other small effects" below a line twice its size
+# has been told the arithmetic was tidied in a way it was not, so rather than
+# print that, the account promotes the next largest lines until the grouped
+# one really is the smallest, up to this many rows. Seven rather than no
+# limit at all: past seven the list stops being read, and an account nobody
+# reads is worse than one that groups honestly.
+MAX_FACTORS_PROMOTED = 7
 
 OTHER_KEY = "other_small_effects"
 OTHER_LABEL = "Other small effects"
@@ -89,6 +99,7 @@ COMBINATION_NOTE = (
     "than add."
 )
 ASSOCIATION_NOTE = "This is a pattern among similar mentors rather than a cause."
+TRACK_RECORD_NOTE = "This is a pattern among similar mentors, not a cause."
 
 POSITION_BELOW = "below"
 POSITION_WITHIN = "within"
@@ -114,7 +125,23 @@ def _plural(count: int, one: str, many: str) -> str:
 # that would make them uniform are exactly what makes copy read as though it
 # came out of a machine.
 # ---------------------------------------------------------------------------
-def _field_sentence(answer: Any, direction: str) -> str:
+@dataclass(frozen=True)
+class Detail:
+    """
+    What a sentence may look at beyond the answer it is about.
+
+    Two things, and both are here to stop a sentence contradicting the figure
+    printed beside it. The size of the effect, so a line too small to matter
+    says so rather than claiming a direction. And the group size the mentors
+    in the comparison typically offer, so a sentence about a group compares
+    it with the groups it is actually being compared against.
+    """
+
+    effect_pct: int = 0
+    typical_group_size: int | None = None
+
+
+def _field_sentence(answer: Any, direction: str, detail: Detail) -> str:
     label = mapping.field_label(answer)
     if direction == RAISES:
         return f"Mentors in {label} tend to charge more than mentors in other fields."
@@ -123,37 +150,72 @@ def _field_sentence(answer: Any, direction: str) -> str:
     return f"Mentors in {label} charge about what mentors in other fields charge."
 
 
-def _group_sentence(answer: Any, direction: str) -> str:
-    seats = int(answer)
+# ---------------------------------------------------------------------------
+# The group size sentence
+#
+# Rewritten because the first version of it said the opposite of the price it
+# sat beside. It read the effect as though it had been measured against a one
+# to one session, so a mentor seeing a group of three priced above their own
+# one to one rate was told that "a session for a group of 3 tends to be
+# priced lower than a one to one session". Both claims were on one screen.
+#
+# The effect is measured against the average mentor in the data, not against
+# a one to one session, and there is no way to turn it into a statement about
+# one to one sessions without inventing the comparison.
+#
+# So the sentence makes the one comparison this page can support: this group
+# against the group the mentors in the comparison sample typically offer.
+# Those mentors are already on the screen, directly below, which is what
+# makes the two halves of it agree.
+#
+# Two rules follow from the fault. The direction word comes from the sign of
+# the effect and from nothing else, so the words and the number can never
+# disagree again. And one to one is named only when the mentor's own group is
+# one, because anywhere else it is a comparison nobody asked for.
+# ---------------------------------------------------------------------------
+def _group_subject(seats: int) -> tuple[str, str]:
+    """How a group is named, and the verb that follows it."""
     if seats <= 1:
-        if direction == RAISES:
-            return (
-                "One to one sessions tend to be priced higher than sessions "
-                "for a group."
-            )
-        if direction == LOWERS:
-            return (
-                "One to one sessions tend to be priced lower per session than "
-                "sessions for a group."
-            )
-        return "Your group size makes little difference to this suggestion."
-    if direction == RAISES:
-        return (
-            f"A session for a group of {seats} tends to be priced higher than "
-            f"a one to one session."
+        return "Your one to one sessions", "are"
+    return f"Your group of {seats}", "is"
+
+
+def _group_sentence(answer: Any, direction: str, detail: Detail) -> str:
+    seats = int(answer)
+    subject, verb = _group_subject(seats)
+
+    # Too small to carry a direction. Said as such rather than dressed up: a
+    # one per cent effect described as raising a price claims more than the
+    # number holds.
+    if abs(detail.effect_pct) < SMALL_EFFECT_PCT or direction == LITTLE:
+        return f"{subject} make little difference to this suggestion."
+
+    movement = "up" if direction == RAISES else "down"
+    usual = detail.typical_group_size
+    if usual is None:
+        # Nobody to compare the group with. The effect is real and is still
+        # reported, without a comparison that was never measured.
+        return f"{subject} tend to move the price per session {movement}."
+
+    if seats > usual:
+        stands = (
+            f"{verb} larger than the typical group of {usual} among similar mentors"
         )
-    if direction == LOWERS:
-        return (
-            f"A session for a group of {seats} tends to be priced lower than "
-            f"a one to one session."
+    elif seats < usual:
+        stands = (
+            f"{verb} smaller than the typical group of {usual} among similar mentors"
         )
-    return f"A session for a group of {seats} is priced much like a one to one session."
+    else:
+        stands = f"{verb} the same size as the typical group among similar mentors"
+    return (
+        f"{subject} {stands}, and that tends to move the price per session {movement}."
+    )
 
 
 NEVER_LOWERS = "Adding a skill never lowers this suggestion."
 
 
-def _skills_sentence(answer: Any, direction: str) -> str:
+def _skills_sentence(answer: Any, direction: str, detail: Detail) -> str:
     count = int(answer)
     covered = (
         "You have not listed any skills yet"
@@ -170,7 +232,7 @@ def _skills_sentence(answer: Any, direction: str) -> str:
     return f"{covered} makes little difference to this suggestion. {NEVER_LOWERS}"
 
 
-def _verified_sentence(answer: Any, direction: str) -> str:
+def _verified_sentence(answer: Any, direction: str, detail: Detail) -> str:
     if bool(answer):
         if direction == RAISES:
             return "Verified mentors tend to charge more than unverified ones."
@@ -184,7 +246,7 @@ def _verified_sentence(answer: Any, direction: str) -> str:
     return "Verification makes little difference to this suggestion."
 
 
-def _services_sentence(answer: Any, direction: str) -> str:
+def _services_sentence(answer: Any, direction: str, detail: Detail) -> str:
     offered = _plural(int(answer), "service", "services")
     if direction == RAISES:
         return f"Mentors offering {offered} tend to charge more."
@@ -193,7 +255,7 @@ def _services_sentence(answer: Any, direction: str) -> str:
     return f"Offering {offered} makes little difference to this suggestion."
 
 
-def _commitment_sentence(answer: Any, direction: str) -> str:
+def _commitment_sentence(answer: Any, direction: str, detail: Detail) -> str:
     asked = _plural(int(answer), "session", "sessions")
     if direction == RAISES:
         return f"Mentors asking for a minimum of {asked} tend to charge more."
@@ -213,21 +275,51 @@ CHOICE_SENTENCES = {
     mapping.CHOICE_COMMITMENT: _commitment_sentence,
 }
 
-THEME_SUBJECTS = {
-    mapping.THEME_REVIEWS: "Mentors whose reviews have come in like yours",
-    mapping.THEME_RATINGS: "Mentors rated like you",
-    mapping.THEME_BOOKINGS: "Mentors booked as much as you",
-    mapping.THEME_STANDING: "Mentors with your standing and time here",
-}
 
-
-def _theme_sentence(theme: str, direction: str) -> str:
-    subject = THEME_SUBJECTS[theme]
+# ---------------------------------------------------------------------------
+# The two sentences about a mentor's record
+#
+# Demand keeps a sentence of its own whatever its size. It is the claim this
+# system is built on, so an account that let it be grouped away would hide
+# the thing the account was written to show.
+#
+# Everything else about a record is said in one sentence, and that sentence
+# deliberately does not name which part of the record moved the price. Named
+# on its own, the ratings line said that mentors rated like this mentor tend
+# to charge less, which reads as an instruction to care less about ratings.
+# What it records is that in this data the mentors charging most are not the
+# ones rated highest, which is a fact about who charges what rather than
+# advice about how to be rated. Said together, and said as an association, it
+# is a description again.
+# ---------------------------------------------------------------------------
+def _demand_sentence(answer: Any, direction: str, detail: Detail) -> str:
+    booked = "Mentors whose time is booked as much as yours"
     if direction == RAISES:
-        return f"{subject} tend to charge more. {ASSOCIATION_NOTE}"
+        return f"{booked} tend to charge more. {ASSOCIATION_NOTE}"
     if direction == LOWERS:
-        return f"{subject} tend to charge less. {ASSOCIATION_NOTE}"
-    return f"{subject} charge about the same as everybody else. {ASSOCIATION_NOTE}"
+        return f"{booked} tend to charge less. {ASSOCIATION_NOTE}"
+    return f"{booked} charge about the same as everybody else. {ASSOCIATION_NOTE}"
+
+
+def _track_record_sentence(answer: Any, direction: str, detail: Detail) -> str:
+    size = abs(detail.effect_pct)
+    together = "Your ratings and activity history together"
+    if direction == LITTLE or size == 0:
+        return (
+            f"{together} make little difference to this suggestion. "
+            f"{TRACK_RECORD_NOTE}"
+        )
+    movement = "up" if direction == RAISES else "down"
+    return (
+        f"{together} move the suggestion {movement} by {size} percent. "
+        f"{TRACK_RECORD_NOTE}"
+    )
+
+
+GROUP_SENTENCES = {
+    mapping.THEME_DEMAND: _demand_sentence,
+    mapping.THEME_TRACK_RECORD: _track_record_sentence,
+}
 
 
 # How a factor is named inside a sentence about the gap.
@@ -238,10 +330,8 @@ GAP_PHRASES = {
     mapping.CHOICE_VERIFIED: "your verification",
     mapping.CHOICE_SERVICES: "the services you offer",
     mapping.CHOICE_COMMITMENT: "your minimum commitment",
-    mapping.THEME_REVIEWS: "how your reviews have come in",
-    mapping.THEME_RATINGS: "what mentees rate you",
-    mapping.THEME_BOOKINGS: "how much of your time is booked",
-    mapping.THEME_STANDING: "your standing and time here",
+    mapping.THEME_DEMAND: "how much your time is in demand",
+    mapping.THEME_TRACK_RECORD: "your track record on the platform",
     OTHER_KEY: "several smaller things together",
 }
 
@@ -268,6 +358,7 @@ def explain_price(
     inputs: dict[str, Any],
     model_used: str,
     suggested_price: int,
+    typical_group_size: int | None = None,
 ) -> dict[str, Any]:
     """
     One suggestion, taken apart into the answers behind it.
@@ -277,6 +368,12 @@ def explain_price(
     reconcile against it rather than against the model's raw answer. The
     difference between the two is real and is carried by the skills line, which
     is the axis the correction acts on.
+
+    ``typical_group_size`` is the group size the mentors in the comparison
+    sample typically offer. It is passed in rather than looked up here so that
+    the sentence about a group and the comparison below it are reading the
+    same mentors. Absent when there is nobody to compare with, and the
+    sentence then says less rather than inventing a comparison.
     """
     answers = mapping.answers_from_inputs(inputs)
     start, parts = pricing.log_contributions(inputs, model_used)
@@ -284,26 +381,115 @@ def explain_price(
     # Fixed inputs are folded into the starting point. The session format is
     # held at one value for everybody; a mentor without a record is held at a
     # starting time on the platform, and for one with a record that is a
-    # measurement instead, so it moves into the themes below.
+    # measurement instead, so it moves into the groups below.
     fixed = list(mapping.EXPLANATION_FIXED_COLUMNS)
     if model_used != FULL:
         fixed.append(mapping.COLUMN_TENURE)
     baseline_log = start + sum(parts[column] for column in fixed)
     baseline = max(float(math.expm1(baseline_log)), 1.0)
 
+    detail = Detail(typical_group_size=typical_group_size)
     candidates = _candidates(parts, answers, model_used)
 
-    # Shown, hidden, and the one line that closes the arithmetic. The skills
-    # line is always shown: it carries the correction, so hiding it would hide
-    # the only place the account and the price are reconciled.
-    big = [
-        one for one in candidates if abs(_as_pct(one["multiplier"])) >= SMALL_EFFECT_PCT
-    ]
-    big.sort(key=lambda one: abs(_as_pct(one["multiplier"])), reverse=True)
-    shown = big[: MAX_FACTORS - 1]
-    hidden = [one for one in candidates if one not in shown]
+    # Demand is never a line that can be grouped away, so it is held out of
+    # the ordering and placed whatever its size. The skills line is held out
+    # for a different reason: it is worked out last, from whatever is left
+    # over, because it carries the correction the prediction service applied.
+    forced = [one for one in candidates if one["key"] == mapping.THEME_DEMAND]
+    pool = sorted(
+        (one for one in candidates if one not in forced),
+        key=lambda one: abs(_as_pct(one["multiplier"])),
+        reverse=True,
+    )
 
-    rows = [_row(one, _as_pct(one["multiplier"])) for one in shown]
+    taken = 1 + len(forced)
+    worth_showing = sum(
+        1 for one in pool if abs(_as_pct(one["multiplier"])) >= SMALL_EFFECT_PCT
+    )
+    fewest = max(0, min(MAX_FACTORS - taken, worth_showing))
+    most = max(fewest, MAX_FACTORS_PROMOTED - taken)
+
+    # Widen until the grouped row is genuinely the smallest thing on the
+    # card, or until there is no more room. A grouped row larger than a row
+    # shown above it tells the reader the account was tidied in a way it was
+    # not.
+    rows, other_row = _settled(
+        pool[:fewest],
+        pool[fewest:],
+        forced,
+        answers,
+        baseline,
+        suggested_price,
+        detail,
+    )
+    for slots in range(fewest + 1, most + 1):
+        if _grouped_is_smallest(rows, other_row):
+            break
+        rows, other_row = _settled(
+            pool[:slots],
+            pool[slots:],
+            forced,
+            answers,
+            baseline,
+            suggested_price,
+            detail,
+        )
+
+    started = int(round(baseline))
+    return {
+        "baseline_price": started,
+        "baseline_sentence": (
+            f"A typical mentor's price is around {started:,} {mapping.CURRENCY}."
+        ),
+        "summary_sentence": _summary_sentence(started, int(suggested_price)),
+        "suggested_price": int(suggested_price),
+        "currency": mapping.CURRENCY,
+        "factors": rows,
+        "other_small_effects": other_row,
+        "combination_note": COMBINATION_NOTE,
+        "limitation": LIMITATION,
+        "profile_note": PROFILE_NOTE,
+    }
+
+
+def _summary_sentence(baseline: int, suggested: int) -> str:
+    """
+    The one line between the typical price and the rows that move it.
+
+    Said as a distance from the typical price rather than as a verdict. A
+    mentor reading "twenty per cent below" knows both numbers and which side
+    of the other they are on; "below average" would tell them neither.
+    """
+    gap = 0 if baseline <= 0 else int(round(abs(suggested - baseline) / baseline * 100))
+    price = f"{suggested:,} {mapping.CURRENCY}"
+    if gap == 0:
+        stands = "about the same as that typical price"
+    else:
+        side = "above" if suggested > baseline else "below"
+        stands = f"{gap} percent {side} that typical price"
+    return f"We suggest {price}, which is {stands}. Here is what moves it:"
+
+
+def _settled(
+    shown: list[dict[str, Any]],
+    hidden: list[dict[str, Any]],
+    forced: list[dict[str, Any]],
+    answers: dict[str, Any],
+    baseline: float,
+    suggested_price: int,
+    detail: Detail,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """
+    One choice of rows, closed by the skills line so the arithmetic comes out.
+
+    Whatever is not shown is multiplied into the grouped row, and the skills
+    line is then whatever is needed for the baseline and the rows together to
+    reach the price the mentor was quoted. That is where the monotone
+    correction lands, which is why the skills line is never hidden.
+    """
+    rows = [
+        _row(one, _as_pct(one["multiplier"]), detail) for one in forced + list(shown)
+    ]
     other_row = _other_row(hidden)
 
     settled = 1.0
@@ -319,25 +505,20 @@ def explain_price(
                 "association": False,
             },
             _as_pct(wanted / settled if settled else 1.0),
+            detail,
         )
     )
     rows.sort(key=lambda row: abs(row["effect_pct"]), reverse=True)
+    return rows, other_row
 
-    started = int(round(baseline))
-    return {
-        "baseline_price": started,
-        "baseline_sentence": (
-            f"A mentor in your situation starts around "
-            f"{started:,} {mapping.CURRENCY}."
-        ),
-        "suggested_price": int(suggested_price),
-        "currency": mapping.CURRENCY,
-        "factors": rows,
-        "other_small_effects": other_row,
-        "combination_note": COMBINATION_NOTE,
-        "limitation": LIMITATION,
-        "profile_note": PROFILE_NOTE,
-    }
+
+def _grouped_is_smallest(
+    rows: list[dict[str, Any]], other_row: dict[str, Any] | None
+) -> bool:
+    """Whether the grouped row is smaller than every row shown above it."""
+    if other_row is None:
+        return True
+    return abs(other_row["effect_pct"]) < min(abs(row["effect_pct"]) for row in rows)
 
 
 def _candidates(
@@ -348,6 +529,11 @@ def _candidates(
 
     The skills line is left out: it is added last, with whatever effect makes
     the account come to the price the mentor was given.
+
+    A mentor with a record adds two lines rather than four. Each carries the
+    themes under it as components, so grouping two themes into one sentence
+    does not amount to dropping either number: both are still reported in the
+    table behind the disclosure.
     """
     candidates: list[dict[str, Any]] = [
         {
@@ -356,21 +542,37 @@ def _candidates(
             "multiplier": math.exp(parts[choice["column"]]),
             "answer": answers[key],
             "association": False,
+            "components": [],
         }
         for key, choice in mapping.EXPLANATION_CHOICES.items()
         if key != mapping.CHOICE_SKILLS
     ]
     if model_used == FULL:
-        candidates.extend(
-            {
-                "key": theme,
-                "label": mapping.explanation_theme_label(theme),
-                "multiplier": math.exp(sum(parts[column] for column in columns)),
-                "answer": None,
-                "association": True,
-            }
+        themes = {
+            theme: math.exp(sum(parts[column] for column in columns))
             for theme, columns in mapping.explanation_theme_columns().items()
-        )
+        }
+        for group, names in mapping.explanation_group_themes().items():
+            multiplier = 1.0
+            for name in names:
+                multiplier *= themes[name]
+            candidates.append(
+                {
+                    "key": group,
+                    "label": mapping.explanation_group_label(group),
+                    "multiplier": multiplier,
+                    "answer": None,
+                    "association": True,
+                    "components": [
+                        {
+                            "key": name,
+                            "label": mapping.explanation_theme_label(name),
+                            "effect_pct": _as_pct(themes[name]),
+                        }
+                        for name in names
+                    ],
+                }
+            )
     return candidates
 
 
@@ -389,24 +591,23 @@ def _other_row(hidden: list[dict[str, Any]]) -> dict[str, Any] | None:
         "effect_pct": effect,
         "sentence": "Everything else about your answers comes to this together.",
         "association": False,
+        "components": [],
     }
 
 
-def _row(one: dict[str, Any], effect_pct: int) -> dict[str, Any]:
+def _row(one: dict[str, Any], effect_pct: int, detail: Detail) -> dict[str, Any]:
     direction = direction_of(effect_pct)
     key = one["key"]
-    sentence = (
-        _theme_sentence(key, direction)
-        if one["association"]
-        else CHOICE_SENTENCES[key](one["answer"], direction)
-    )
+    said = Detail(effect_pct=effect_pct, typical_group_size=detail.typical_group_size)
+    write = GROUP_SENTENCES.get(key) or CHOICE_SENTENCES[key]
     return {
         "key": key,
         "label": one["label"],
         "direction": direction,
         "effect_pct": effect_pct,
-        "sentence": sentence,
+        "sentence": write(one["answer"], direction, said),
         "association": bool(one["association"]),
+        "components": list(one.get("components") or []),
     }
 
 

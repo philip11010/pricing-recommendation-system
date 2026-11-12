@@ -107,7 +107,19 @@ def with_record(row: dict) -> dict:
     return {**row, **mapping.history_to_model_inputs(SYNTHETIC_HISTORY)}
 
 
-def account_for(pricing, profile: dict, model_used: str) -> tuple[dict, int]:
+# What the mentors in a comparison sample typically offer, which is the one
+# figure an account borrows from the comparison below it. Pinned here rather
+# than read from a table so that a sentence about a group size is tested
+# against a known number.
+TYPICAL_GROUP_SIZE = 2
+
+
+def account_for(
+    pricing,
+    profile: dict,
+    model_used: str,
+    typical_group_size: int | None = TYPICAL_GROUP_SIZE,
+) -> tuple[dict, int]:
     """The account and the price it has to come to."""
     row = answers(profile)
     if model_used == FULL:
@@ -119,13 +131,15 @@ def account_for(pricing, profile: dict, model_used: str) -> tuple[dict, int]:
             inputs=row,
             model_used=model_used,
             suggested_price=price,
+            typical_group_size=typical_group_size,
         ),
         price,
     )
 
 
 def every_sentence(account: dict) -> list[str]:
-    said = [account["baseline_sentence"], account["combination_note"]]
+    said = [account["baseline_sentence"], account["summary_sentence"]]
+    said += [account["combination_note"]]
     said += [account["limitation"], account["profile_note"]]
     rows = list(account["factors"])
     if account["other_small_effects"]:
@@ -202,7 +216,7 @@ def test_no_factor_is_an_input_the_mentor_did_not_choose(pricing, model_used):
     at a starting time on the platform; neither belongs in a list of things
     that moved their price.
     """
-    allowed = set(mapping.EXPLANATION_CHOICES) | set(mapping.EXPLANATION_THEMES)
+    allowed = set(mapping.EXPLANATION_CHOICES) | set(mapping.EXPLANATION_GROUPS)
     for profile in PROFILES[:16]:
         account, _ = account_for(pricing, profile, model_used)
         keys = {row["key"] for row in account["factors"]}
@@ -219,12 +233,16 @@ def test_a_mentor_without_a_record_is_told_nothing_about_one(pricing):
     assert not any(row["association"] for row in account["factors"])
 
 
-def test_a_mentor_with_a_record_sees_it_as_themes_with_their_caution(pricing):
+def test_a_mentor_with_a_record_sees_it_as_groups_with_their_caution(pricing):
     """
-    The twenty-nine measured quantities arrive as at most four themes.
+    The twenty-nine measured quantities arrive as two groups, not four themes.
 
-    Each one carries the caution it needs: a price moving with a theme is a
-    pattern among mentors who charge alike, not a claim about cause.
+    Each carries the caution it needs: a price moving with a measurement is a
+    pattern among mentors who charge alike, never a claim about cause.
+
+    The themes under each group are still reported, as components, because
+    grouping two of them into one sentence is a decision about what to say
+    and must not become a decision to drop a number.
     """
     seen: set[str] = set()
     for profile in PROFILES[:16]:
@@ -232,25 +250,263 @@ def test_a_mentor_with_a_record_sees_it_as_themes_with_their_caution(pricing):
         for row in account["factors"]:
             if row["association"]:
                 seen.add(row["key"])
-                assert "rather than a cause" in row["sentence"]
+                assert "pattern among similar mentors" in row["sentence"]
+                assert "a cause" in row["sentence"]
+                assert row["components"]
+                assert {part["key"] for part in row["components"]} <= set(
+                    mapping.EXPLANATION_THEMES
+                )
 
     assert seen
-    assert seen <= set(mapping.EXPLANATION_THEMES)
-    assert len(mapping.EXPLANATION_THEMES) <= 4
+    assert seen <= set(mapping.EXPLANATION_GROUPS)
+    assert len(mapping.EXPLANATION_GROUPS) == 2
+
+
+def test_demand_is_its_own_row_for_every_mentor_with_a_record(pricing):
+    """
+    Demand is never grouped away, whatever size its effect turns out to be.
+
+    Responsiveness to demand is the claim this whole system makes, so an
+    account that let demand fall into "other small effects" on a quiet
+    profile would be hiding its own subject on exactly the profiles where a
+    mentor would most want to see it.
+    """
+    for profile in PROFILES[:16]:
+        account, _ = account_for(pricing, profile, FULL)
+        rows = {row["key"]: row for row in account["factors"]}
+
+        assert mapping.THEME_DEMAND in rows, profile
+        demand = rows[mapping.THEME_DEMAND]
+        assert demand["label"] == "Demand for your time"
+        assert "booked as much as yours" in demand["sentence"]
+
+
+def test_a_new_mentor_is_shown_no_demand_row_at_all(pricing):
+    """
+    Nothing was measured, so there is nothing to show.
+
+    A demand row on a mentor the platform has never watched would be a figure
+    about them that nobody observed, which is worse than an absent row.
+    """
+    for profile in PROFILES[:16]:
+        account, _ = account_for(pricing, profile, CORE)
+        rows = [row["key"] for row in account["factors"]]
+        if account["other_small_effects"]:
+            rows.append(account["other_small_effects"]["key"])
+
+        assert mapping.THEME_DEMAND not in rows, profile
+        assert mapping.THEME_TRACK_RECORD not in rows, profile
+
+
+def test_no_row_ever_says_a_better_rating_lowers_a_price(pricing):
+    """
+    A standalone ratings row read as advice to stop collecting ratings.
+
+    What the data holds is that the mentors charging most are not the ones
+    rated highest, which is a fact about who charges what. Printed as its own
+    line it became guidance nobody can act on honestly, so ratings are only
+    ever spoken of inside the wider record.
+    """
+    blamed = re.compile(r"rated[^.]*charge less", re.IGNORECASE)
+    for profile in PROFILES[:16]:
+        account, _ = account_for(pricing, profile, FULL)
+
+        assert mapping.THEME_RATINGS not in {
+            row["key"] for row in account["factors"]
+        }, profile
+        for said in every_sentence(account):
+            assert not blamed.search(said), (profile, said)
 
 
 @pytest.mark.parametrize("model_used", [CORE, FULL])
 def test_at_most_five_factors_plus_the_row_that_gathers_the_small_ones(
     pricing, model_used
 ):
+    """
+    Five rows, or up to seven when five would leave a dishonest grouped row.
+
+    The limit exists because nobody reads a longer list. It gives way only to
+    the rule below it, which is the stronger claim.
+    """
     for profile in PROFILES[:16]:
         account, _ = account_for(pricing, profile, model_used)
 
-        assert len(account["factors"]) <= explanation.MAX_FACTORS
+        assert len(account["factors"]) <= explanation.MAX_FACTORS_PROMOTED
         keys = [row["key"] for row in account["factors"]]
         assert len(keys) == len(set(keys))
         if account["other_small_effects"]:
             assert account["other_small_effects"]["key"] == explanation.OTHER_KEY
+
+
+@pytest.mark.parametrize("model_used", [CORE, FULL])
+def test_the_grouped_row_is_the_smallest_thing_on_the_card(pricing, model_used):
+    """
+    "Other small effects" has to be smaller than every row shown above it.
+
+    Otherwise the row is not what it says it is: a reader seeing it sitting
+    below a line half its size has been told the account was tidied in a way
+    it was not. Where five rows cannot manage that, the account widens to
+    seven rather than print the claim, and only a card already at seven is
+    allowed to fall short.
+    """
+    for profile in PROFILES[:16]:
+        account, _ = account_for(pricing, profile, model_used)
+        other = account["other_small_effects"]
+        if other is None:
+            continue
+
+        smallest = min(abs(row["effect_pct"]) for row in account["factors"])
+        widened = len(account["factors"]) >= explanation.MAX_FACTORS_PROMOTED
+
+        assert abs(other["effect_pct"]) < smallest or widened, (
+            model_used,
+            profile,
+            other["effect_pct"],
+            smallest,
+        )
+
+
+# ---------------------------------------------------------------------------
+# The group size sentence
+#
+# This sentence was wrong on the page before it was wrong in a test. It read
+# the effect as a comparison against a one to one session, so a mentor whose
+# group of three was priced above their own one to one rate was told that a
+# group of three tends to be priced lower than a one to one session, with
+# both claims on one screen.
+#
+# Two properties stop that happening again. The words follow the sign of the
+# number and nothing else. And one to one is named only when the mentor's own
+# group is one, so the sentence cannot smuggle back the comparison that was
+# never measured.
+# ---------------------------------------------------------------------------
+RAISING_WORDS = re.compile(r"\bmove the price per session up\b", re.IGNORECASE)
+LOWERING_WORDS = re.compile(r"\bmove the price per session down\b", re.IGNORECASE)
+
+
+def group_row(account: dict) -> dict | None:
+    for row in account["factors"]:
+        if row["key"] == mapping.CHOICE_GROUP_SIZE:
+            return row
+    other = account["other_small_effects"]
+    return other if other and other["key"] == mapping.CHOICE_GROUP_SIZE else None
+
+
+@pytest.mark.parametrize("model_used", [CORE, FULL])
+def test_the_group_sentence_never_contradicts_its_own_number(pricing, model_used):
+    """
+    The direction word in the sentence agrees with the sign of the effect.
+
+    Asserted over every profile rather than a chosen one, because the fault
+    this replaced was only visible on the profiles where the sign and the
+    old comparison happened to disagree.
+    """
+    for profile in PROFILES:
+        account, _ = account_for(pricing, profile, model_used)
+        row = group_row(account)
+        if row is None:
+            continue
+        said = row["sentence"]
+
+        if row["effect_pct"] > 0:
+            assert not LOWERING_WORDS.search(said), (profile, said)
+            assert row["direction"] == explanation.RAISES
+        elif row["effect_pct"] < 0:
+            assert not RAISING_WORDS.search(said), (profile, said)
+            assert row["direction"] == explanation.LOWERS
+
+        # Under two per cent the sentence claims no direction at all.
+        if abs(row["effect_pct"]) < explanation.SMALL_EFFECT_PCT:
+            assert "little difference" in said, (profile, said)
+            assert not RAISING_WORDS.search(said)
+            assert not LOWERING_WORDS.search(said)
+
+
+@pytest.mark.parametrize("model_used", [CORE, FULL])
+def test_one_to_one_is_named_only_when_the_group_really_is_one(pricing, model_used):
+    """
+    Nothing anywhere in an account mentions one to one for a larger group.
+
+    The whole account, not only the group row: a phrase barred from one
+    sentence and allowed into the one below it would be the same fault with
+    a smaller blast radius.
+    """
+    for profile in PROFILES:
+        account, _ = account_for(pricing, profile, model_used)
+        for said in every_sentence(account):
+            if profile["max_mentees"] == 1:
+                continue
+            assert "one to one" not in said.lower(), (profile, said)
+
+
+def test_the_group_sentence_compares_with_the_mentors_on_the_screen(pricing):
+    """
+    The comparison named is the sample's typical group, not a fixed one.
+
+    A sentence that named a number from somewhere else would be describing
+    mentors the page never drew, and a reader checking it against the
+    comparison below would find two different sets of mentors.
+    """
+    profile = {**PROFILES[2], "max_mentees": 5}
+    for typical in (2, 6):
+        account, _ = account_for(pricing, profile, CORE, typical_group_size=typical)
+        row = group_row(account)
+        assert row is not None
+        said = row["sentence"]
+        if abs(row["effect_pct"]) < explanation.SMALL_EFFECT_PCT:
+            continue
+
+        assert f"typical group of {typical}" in said, (typical, said)
+        bigger = "larger" if 5 > typical else "smaller"
+        assert bigger in said, (typical, said)
+
+
+def test_with_nobody_to_compare_with_the_sentence_claims_no_comparison(pricing):
+    """A typical group that was never measured is not invented."""
+    for profile in PROFILES[:8]:
+        account, _ = account_for(pricing, profile, CORE, typical_group_size=None)
+        row = group_row(account)
+        if row is None or abs(row["effect_pct"]) < explanation.SMALL_EFFECT_PCT:
+            continue
+
+        assert "typical group" not in row["sentence"], (profile, row["sentence"])
+
+
+# ---------------------------------------------------------------------------
+# The line between the typical price and the rows that move it
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("model_used", [CORE, FULL])
+def test_the_summary_line_places_the_suggestion_against_the_typical_price(
+    pricing, model_used
+):
+    """
+    One line, carrying the suggestion, the distance and the side.
+
+    Said as a distance rather than as a verdict: a mentor reading "eighteen
+    percent below" has both numbers and knows which side of the other they
+    are on, where "below average" would give them neither.
+    """
+    for profile in PROFILES[:16]:
+        account, price = account_for(pricing, profile, model_used)
+        said = account["summary_sentence"]
+        baseline = account["baseline_price"]
+        gap = round(abs(price - baseline) / baseline * 100)
+
+        assert f"{price:,}" in said, (profile, said)
+        assert said.endswith("Here is what moves it:")
+        if gap == 0:
+            assert "about the same as that typical price" in said
+        else:
+            side = "above" if price > baseline else "below"
+            assert f"{gap} percent {side} that typical price" in said, (profile, said)
+
+
+def test_the_baseline_line_calls_it_a_typical_price(pricing):
+    """A starting point is a number; a typical price is a thing to compare with."""
+    account, _ = account_for(pricing, PROFILES[0], CORE)
+
+    assert account["baseline_sentence"].startswith("A typical mentor's price is around")
+    assert "your situation" not in account["baseline_sentence"]
 
 
 @pytest.mark.parametrize("model_used", [CORE, FULL])
@@ -507,12 +763,13 @@ def test_a_mentor_with_a_record_is_explained_by_the_full_model(client, api_sessi
 
     assert payload["model_used"] == "full"
     assert payload["low_confidence"] is False
-    # Whether a theme is large enough to earn a row of its own depends on the
-    # mentor. What the full path guarantees is that the themes were weighed
-    # and that nothing outside the two vocabularies reached the response.
-    assert {row["key"] for row in payload["factors"]} <= (
-        set(mapping.EXPLANATION_CHOICES) | set(mapping.EXPLANATION_THEMES)
-    )
+    # What the full path guarantees is that a mentor's record was weighed,
+    # that demand got a row of its own out of it, and that nothing outside
+    # the two vocabularies reached the response.
+    keys = {row["key"] for row in payload["factors"]}
+
+    assert keys <= (set(mapping.EXPLANATION_CHOICES) | set(mapping.EXPLANATION_GROUPS))
+    assert mapping.THEME_DEMAND in keys
 
 
 def test_another_mentors_price_is_not_found(client):

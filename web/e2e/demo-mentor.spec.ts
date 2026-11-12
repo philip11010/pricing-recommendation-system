@@ -51,4 +51,24 @@ test.describe("a mentor with a history", () => {
     await expect(compare).toBeVisible();
     await expect(compare.getByText("Where most mentors sit").first()).toBeVisible();
   });
+
+  test("sees how booked they are against similar mentors", async ({ page }) => {
+    await logIn(page, DEMO_EMAIL, DEMO_PASSWORD);
+    await expect(page).toHaveURL(/\/dashboard$/);
+
+    const demand = page.getByRole("region", { name: "Demand for your time" });
+    await expect(demand).toBeVisible();
+
+    // The answer is in the sentence, not in a colour or a bar.
+    await expect(demand.getByText(/Your time is booked/)).toBeVisible();
+
+    const table = demand.getByRole("group", {
+      name: "How booked you are, against similar mentors",
+    });
+    await expect(table).not.toBeVisible();
+    await demand.getByText("View the numbers").click();
+
+    await expect(table).toBeVisible();
+    await expect(table.getByRole("cell", { name: "You", exact: true })).toBeVisible();
+  });
 });

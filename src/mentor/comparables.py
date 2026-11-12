@@ -435,6 +435,33 @@ def typical_profile(
     return typical
 
 
+def typical_booked_share(
+    found: ComparableSet, points: int = SPREAD_POINTS
+) -> float | None:
+    """
+    How much of their offered time a typical comparable mentor has taken.
+
+    The one measurement in this table that a mentor has a comparable figure
+    of their own for, which is what makes a demand comparison possible at
+    all. Everything else here is either what they charge or what they offer.
+
+    Read off the same reduced sample as the summary and the chart, for the
+    same reason as every other figure in this module: a sentence about demand
+    and a dot on a chart beside it should be describing the same mentors.
+
+    Null when there is nobody to read it from. A zero would say the mentors
+    being compared with had none of their time taken, which is a claim about
+    them rather than an absence of one.
+    """
+    sample = spread(found, points)
+    if sample.empty:
+        return None
+    share = sample["booked_share_365d"].median()
+    if pd.isna(share):
+        return None
+    return float(share)
+
+
 def histogram(found: ComparableSet, bins: int = HISTOGRAM_BINS) -> dict[str, Any]:
     """
     The distribution of session prices among the comparable mentors.

@@ -550,6 +550,61 @@ def explanation_theme_label(name: str) -> str:
     return str(EXPLANATION_THEMES[name]["label"])
 
 
+THEME_DEMAND = "demand"
+THEME_TRACK_RECORD = "track_record"
+
+# Two groups over the four themes, which is the level an account of a price
+# talks about a mentor's record at.
+#
+# Demand is a group of its own and is never merged into anything else.
+# Whether a mentor's time is being taken is the measurement this system
+# exists to respond to, so a page that folded it into a general line about
+# the mentor's record would have hidden its own subject. It is shown whatever
+# its size, including when that size is small, because "your demand barely
+# moves this" is an answer a mentor is owed rather than one to leave out.
+#
+# Everything else is one group. Split finer it invites a reading nothing here
+# supports: a row of its own saying that mentors rated like you charge less
+# reads as advice to stop collecting ratings, when what it records is that
+# the mentors who charge most in this data are not the ones rated highest.
+# Held together with the rest of the record, and said as an association, it
+# stays a description of a pattern.
+EXPLANATION_GROUPS: dict[str, dict[str, Any]] = {
+    THEME_DEMAND: {
+        "label": "Demand for your time",
+        "themes": (THEME_BOOKINGS, THEME_REVIEWS),
+    },
+    THEME_TRACK_RECORD: {
+        "label": "Your track record on the platform",
+        "themes": (THEME_RATINGS, THEME_STANDING),
+    },
+}
+
+
+def explanation_group_columns() -> dict[str, tuple[str, ...]]:
+    """Each group as the model columns behind it, themes flattened out."""
+    themes = explanation_theme_columns()
+    return {
+        name: tuple(column for theme in group["themes"] for column in themes[theme])
+        for name, group in EXPLANATION_GROUPS.items()
+    }
+
+
+def explanation_group_themes() -> dict[str, tuple[str, ...]]:
+    """
+    Which themes each group is made of.
+
+    A row a mentor reads is one of these groups. The themes under it are
+    still reported, in the table behind the disclosure, so that grouping two
+    things into one sentence does not amount to hiding either of them.
+    """
+    return {name: tuple(group["themes"]) for name, group in EXPLANATION_GROUPS.items()}
+
+
+def explanation_group_label(name: str) -> str:
+    return str(EXPLANATION_GROUPS[name]["label"])
+
+
 class ModelColumnsMismatchError(RuntimeError):
     """
     The loaded models do not take the columns this module produces.

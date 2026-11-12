@@ -33,6 +33,7 @@ import {
   Statistic,
   TextLink,
 } from "@/components/ui";
+import { DataDisclosure } from "@/components/data-disclosure";
 import { api } from "@/lib/api-client";
 import type { Activity, Dashboard, Mentor } from "@/lib/api-types";
 import {
@@ -44,7 +45,7 @@ import {
 import { COMPARABLES_UNAVAILABLE_NOTE, decisionWord } from "@/lib/copy";
 import { messageFor } from "@/lib/errors";
 import { similarHref } from "@/lib/origin";
-import { formatMoney, formatRating } from "@/lib/format";
+import { formatMoney, formatPercent, formatRating } from "@/lib/format";
 import { useAsync } from "@/lib/use-async";
 
 function firstNameOf(name: string): string {
@@ -182,6 +183,70 @@ function HowYouCompare({ dashboard }: { dashboard: Dashboard }) {
           tableCaption="Your price against similar mentors, in AUD"
         />
       </div>
+    </Card>
+  );
+}
+
+/**
+ * Demand for a mentor's time, beside comparable mentors.
+ *
+ * The one card here that is not about money. Everything else on this page is
+ * what somebody charges; this is how much of the time a mentor offered was
+ * taken, against the same measure for the mentors they are compared with.
+ *
+ * Nothing at all for a mentor the platform has not measured, which is every
+ * new one. The API sends null for them rather than a zero, and the card is
+ * absent rather than empty: a zero here would say their time went untaken.
+ *
+ * The meaning is in the sentence and in the words beside each figure, never
+ * in a colour. The two shares sit in a table behind a disclosure, like every
+ * other figure on this page, so the sentence is read first and the numbers
+ * are there for anybody who wants to check it.
+ */
+function DemandSection({ dashboard }: { dashboard: Dashboard }) {
+  const demand = dashboard.demand;
+  if (!demand) {
+    return null;
+  }
+
+  const standing = {
+    above: "More than most similar mentors",
+    below: "Less than most similar mentors",
+    similar: "About the same as most similar mentors",
+  }[demand.position];
+
+  return (
+    <Card role="region" aria-label="Demand for your time">
+      <h2 className="text-h3 font-semibold">Demand for your time</h2>
+      <p className="mt-2 max-w-prose text-ink-700">{demand.sentence}</p>
+
+      <p className="mt-4 font-semibold text-ink-900">{standing}</p>
+      <p className="mt-1 text-small text-ink-500">
+        <span className="tabular">{formatPercent(demand.booked_percent)}</span> of your
+        offered time is booked, against{" "}
+        <span className="tabular">{formatPercent(demand.typical_booked_percent)}</span>{" "}
+        for a typical similar mentor.
+      </p>
+
+      <DataDisclosure
+        caption="How booked you are, against similar mentors"
+        summaryLabel="View the numbers"
+        columns={["Who", "Share of offered time booked"]}
+        rows={[
+          [
+            "You",
+            <span key="mine" className="tabular">
+              {formatPercent(demand.booked_percent)}
+            </span>,
+          ],
+          [
+            `A typical similar mentor (${demand.compared_with} compared)`,
+            <span key="theirs" className="tabular">
+              {formatPercent(demand.typical_booked_percent)}
+            </span>,
+          ],
+        ]}
+      />
     </Card>
   );
 }
@@ -430,6 +495,7 @@ function DashboardScreen({ mentor }: { mentor: Mentor }) {
                   stats={stats}
                 />
                 <HowYouCompare dashboard={dashboard.data} />
+                <DemandSection dashboard={dashboard.data} />
                 <ReviewsSection activity={activity.data} />
               </>
             )}

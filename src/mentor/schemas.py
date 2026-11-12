@@ -931,6 +931,21 @@ class PriceDistributionOut(BaseModel):
     )
 
 
+class FactorPartOut(BaseModel):
+    """
+    One of the measured themes a grouped factor was built from.
+
+    A row a mentor reads may stand for more than one thing about their
+    record. These are the parts behind it, reported so that grouping two
+    themes into one sentence does not amount to hiding either number: a page
+    shows them in the table behind its disclosure rather than in the row.
+    """
+
+    key: str = Field(examples=["ratings"])
+    label: str = Field(examples=["What mentees rate you"])
+    effect_pct: int = Field(examples=[-4])
+
+
 class PriceFactorOut(BaseModel):
     """
     One thing about a mentor's answers, and what it does to their price.
@@ -968,6 +983,14 @@ class PriceFactorOut(BaseModel):
         description=(
             "True when this is a pattern among similar mentors rather than "
             "an answer the mentor gave."
+        ),
+    )
+    components: list[FactorPartOut] = Field(
+        default_factory=list,
+        description=(
+            "The measured themes behind a grouped row, empty for a row that "
+            "stands for one answer. Reported so that a page can show the "
+            "parts of a group in its numbers table."
         ),
     )
 
@@ -1045,6 +1068,13 @@ class ExplanationOut(BaseModel):
         description="Where a price for a mentor in this situation starts."
     )
     baseline_sentence: str
+    summary_sentence: str = Field(
+        description=(
+            "The one line between the typical price and the rows that move "
+            "it, saying how far the suggestion sits from that typical price "
+            "and on which side."
+        )
+    )
     suggested_price: int
     factors: list[PriceFactorOut] = Field(
         description="Largest effect first, at most five."
@@ -1380,6 +1410,44 @@ class DashboardHeadlineOut(BaseModel):
     currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
 
 
+class DemandComparisonOut(BaseModel):
+    """
+    How much of a mentor's offered time is taken, beside similar mentors.
+
+    Only for a mentor the platform has measured. A new mentor has no such
+    measurement, and a share invented for them would be the one number on the
+    page that was never observed, so the field is null and the page shows
+    nothing rather than a zero.
+
+    ``position`` is one of above, below or about the same, and the sentence
+    says the same thing in words, so no page has to carry the meaning in a
+    colour. Both are advice: a mentor booked more than the mentors beside
+    them may have a reason to stay where they are, and this says what the
+    figures look like rather than what to do about them.
+    """
+
+    position: str = Field(description="above, below, or similar.", examples=["above"])
+    booked_percent: float = Field(
+        description="The share of this mentor's offered time that is taken.",
+        examples=[62.0],
+    )
+    typical_booked_percent: float = Field(
+        description="The same share for a typical comparable mentor.",
+        examples=[48.0],
+    )
+    difference_points: float = Field(
+        description=(
+            "How far apart the two shares are, in percentage points, signed "
+            "towards the mentor."
+        ),
+        examples=[14.0],
+    )
+    compared_with: int = Field(
+        description="How many comparable mentors the typical share is from."
+    )
+    sentence: str = Field(description="The comparison in one plain sentence.")
+
+
 class DashboardOut(BaseModel):
     """A mentor's own page: one block per service, plus their own totals."""
 
@@ -1405,6 +1473,14 @@ class DashboardOut(BaseModel):
             "server, which is why the comparables and percentile fields are "
             "null."
         )
+    )
+    demand: DemandComparisonOut | None = Field(
+        default=None,
+        description=(
+            "How booked this mentor is beside comparable mentors, or null "
+            "when the platform has not measured it for them or there is "
+            "nobody comparable to measure it against."
+        ),
     )
     totals: DashboardTotalsOut
     services: list[DashboardServiceOut]

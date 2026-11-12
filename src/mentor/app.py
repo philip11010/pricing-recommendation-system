@@ -84,6 +84,7 @@ from src.mentor.schemas import (
     DecisionCountsOut,
     DecisionInput,
     DecisionOut,
+    DemandComparisonOut,
     DemoMentorOut,
     ErrorOut,
     ExplanationOut,
@@ -1596,13 +1597,21 @@ async def read_explanation(
             status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
         )
 
+    # The comparison is read first because the account borrows one figure
+    # from it. A sentence about a mentor's group size compares it with the
+    # group the mentors in this sample typically offer, and those mentors are
+    # on the same screen, so both halves have to be reading the same sample.
+    found = comparables_for(table, record.service, mentor)
+    typical = comparables_module.typical_profile(found)
+    seats = typical.get("max_mentees")
+
     account = explanation_module.explain_price(
         pricing=pricing,
         inputs=dict(record.inputs_snapshot),
         model_used=record.model_used,
         suggested_price=int(record.recommended_price),
+        typical_group_size=None if seats is None else int(round(float(seats))),
     )
-    found = comparables_for(table, record.service, mentor)
     comparison = explanation_module.compare_price(
         found=found,
         suggested_price=int(record.recommended_price),
@@ -1619,6 +1628,7 @@ async def read_explanation(
         currency=account["currency"],
         baseline_price=account["baseline_price"],
         baseline_sentence=account["baseline_sentence"],
+        summary_sentence=account["summary_sentence"],
         suggested_price=account["suggested_price"],
         factors=[PriceFactorOut(**row) for row in account["factors"]],
         other_small_effects=PriceFactorOut(**other) if other else None,
@@ -2113,6 +2123,89 @@ def comparison_phrase(found: comparables_module.ComparableSet, service: Service)
     return f"{session_word} mentors on the platform"
 
 
+# ---------------------------------------------------------------------------
+# Demand, beside comparable mentors
+#
+# The one measurement a mentor and the mentors they are compared with both
+# have: the share of the time they offered that was taken. Everything else in
+# the comparison table is what somebody charges or what they offer, so this
+# is the only honest demand comparison available, and it is why this card can
+# exist at all.
+#
+# Only for a mentor the platform has measured. A new mentor has no share, and
+# a zero in its place would say their time went untaken rather than unrecorded.
+#
+# Phrased as advice and never as an instruction. A mentor booked more than
+# the mentors beside them may have every reason to stay where they are; what
+# the card says is what the two figures look like, and that there is room to
+# consider a change.
+# ---------------------------------------------------------------------------
+
+# How far apart two shares have to be before the difference is worth a word.
+# Below this the two mentors are as booked as each other and a card claiming
+# otherwise is reading noise.
+DEMAND_MEANINGFUL_POINTS = 5.0
+
+DEMAND_SENTENCES = {
+    "above": (
+        "Your time is booked more than most similar mentors, so there is "
+        "room to consider a higher price."
+    ),
+    "below": (
+        "Your time is booked less than most similar mentors, so a lower "
+        "price is one thing you could consider."
+    ),
+    "similar": (
+        "Your time is booked about as much as most similar mentors, so "
+        "there is nothing here pointing either way."
+    ),
+}
+
+
+def demand_of(
+    mentor: Mentor,
+    service: Service | None,
+    history: MentorHistory | None,
+    table: comparables_module.ComparablesTable | None,
+) -> DemandComparisonOut | None:
+    """
+    How booked this mentor is beside comparable mentors, or nothing at all.
+
+    Null rather than a card with empty figures whenever any of the three
+    things it needs is missing: a service to compare through, a measured
+    share for this mentor, and comparable mentors to read a typical share
+    from. A new mentor is missing the second of those, which is why their
+    page shows nothing here.
+    """
+    if service is None or table is None or history is None:
+        return None
+    mine = history.booked_share_365d
+    if mine is None:
+        return None
+
+    found = comparables_for(table, service, mentor)
+    theirs = comparables_module.typical_booked_share(found)
+    if theirs is None:
+        return None
+
+    booked = round(float(mine) * 100, 1)
+    typical = round(float(theirs) * 100, 1)
+    apart = round(booked - typical, 1)
+    if abs(apart) < DEMAND_MEANINGFUL_POINTS:
+        position = "similar"
+    else:
+        position = "above" if apart > 0 else "below"
+
+    return DemandComparisonOut(
+        position=position,
+        booked_percent=booked,
+        typical_booked_percent=typical,
+        difference_points=apart,
+        compared_with=int(comparables_module.typical_profile(found).get("count", 0)),
+        sentence=DEMAND_SENTENCES[position],
+    )
+
+
 def headline_of(
     mentor: Mentor,
     service: Service | None,
@@ -2228,6 +2321,12 @@ async def read_dashboard(
         ),
         currency=mapping.CURRENCY,
         comparables_available=table is not None,
+        demand=demand_of(
+            mentor,
+            mentor.services[0] if mentor.services else None,
+            session.get(MentorHistory, mentor.id),
+            table,
+        ),
         totals=DashboardTotalsOut(
             services=len(mentor.services),
             services_with_a_price=sum(

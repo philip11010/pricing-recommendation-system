@@ -33,8 +33,11 @@ function factor(overrides: Partial<PriceFactor> = {}): PriceFactor {
     label: "Your group size",
     direction: "raises",
     effect_pct: 10,
-    sentence: "A session for a group of 4 tends to be priced higher.",
+    sentence:
+      "Your group of 4 is larger than the typical group of 2 among similar " +
+      "mentors, and that tends to move the price per session up.",
     association: false,
+    components: [],
     ...overrides,
   };
 }
@@ -159,5 +162,88 @@ describe("positionWords", () => {
 
   it("admits when there is not enough to say", () => {
     expect(positionWords("unknown")).toBe("Not enough to say");
+  });
+});
+
+/**
+ * The two wording rules a row has to keep, checked on the shape the page
+ * draws from rather than on the page itself.
+ *
+ * Neither of these is about looks. A row whose words disagree with its number
+ * is wrong in a way that reads perfectly well, which is exactly the fault
+ * these exist to catch.
+ */
+describe("a row's words beside its number", () => {
+  it("never pairs a lowering sentence with a raising figure", () => {
+    const raising = factor({
+      effect_pct: 14,
+      direction: "raises",
+      sentence:
+        "Your group of 4 is larger than the typical group of 2 among similar " +
+        "mentors, and that tends to move the price per session up.",
+    });
+
+    expect(describeEffect(raising)).toContain("raises");
+    expect(raising.sentence).toContain("up");
+    expect(raising.sentence).not.toContain("down");
+  });
+
+  it("never names a one to one session for a larger group", () => {
+    const grouped = factor({
+      sentence:
+        "Your group of 4 is larger than the typical group of 2 among similar " +
+        "mentors, and that tends to move the price per session up.",
+    });
+
+    expect(grouped.sentence.toLowerCase()).not.toContain("one to one");
+  });
+});
+
+describe("a grouped row's parts", () => {
+  it("carries the themes behind it, for the numbers table", () => {
+    const record = factor({
+      key: "track_record",
+      label: "Your track record on the platform",
+      association: true,
+      effect_pct: -12,
+      direction: "lowers",
+      sentence:
+        "Your ratings and activity history together move the suggestion down " +
+        "by 12 percent. This is a pattern among similar mentors, not a cause.",
+      components: [
+        { key: "ratings", label: "What mentees rate you", effect_pct: -9 },
+        { key: "standing", label: "Your standing and time here", effect_pct: -3 },
+      ],
+    });
+
+    expect(record.components).toHaveLength(2);
+    expect(record.components.map((part) => formatEffect(part.effect_pct))).toEqual([
+      "-9%",
+      "-3%",
+    ]);
+  });
+
+  it("is empty for a row that stands for one answer", () => {
+    expect(factor().components).toEqual([]);
+  });
+});
+
+describe("the bars across a card with a demand row on it", () => {
+  it("scales a demand row against the largest effect like any other", () => {
+    const rows = [
+      factor({ key: "group_size", effect_pct: -40 }),
+      factor({ key: "demand", effect_pct: 12, association: true }),
+      factor({ key: "track_record", effect_pct: -12, association: true }),
+    ];
+    const largest = largestEffect(rows);
+
+    expect(largest).toBe(40);
+    expect(barPercent(12, largest)).toBe(30);
+    expect(barPercent(-12, largest)).toBe(30);
+    expect(barPercent(-40, largest)).toBe(100);
+  });
+
+  it("still draws a sliver for a demand row that barely moves anything", () => {
+    expect(barPercent(1, 40)).toBe(MINIMUM_BAR_PERCENT);
   });
 });
