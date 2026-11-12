@@ -35,7 +35,6 @@ BASE_ANSWERS = {
     "min_commitment": 1,
     "skills": ["cv_review", "interview_preparation", "career_planning"],
     "profile_verified": True,
-    "services_planned": 1,
     "services_count": 1,
 }
 
@@ -53,7 +52,6 @@ SWEEP_ANSWERS = {
     "min_commitment": 2,
     "skills": list(mapping.SKILLS)[:20],
     "profile_verified": True,
-    "services_planned": 1,
     "services_count": 1,
 }
 

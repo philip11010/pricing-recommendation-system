@@ -32,39 +32,25 @@ from src.mentor.comparables import (
     ComparablesUnavailableError,
     load_comparables,
 )
-from src.mentor.dependencies import MENTOR_ID_HEADER
 
-from .conftest import SYNTHETIC_HISTORY, synthetic_comparables
-
-REGISTRATION = {
-    "full_name": "A. Mentor",
-    "email": "mentor@example.com",
-    "years_mentoring_band": "3_to_5",
-    "services_planned": 1,
-    "service": {
-        "field": "technology_software",
-        "max_mentees": 2,
-        "min_commitment": 1,
-        "skills": ["cv_review"],
-        "profile_verified": True,
-    },
-}
+from .conftest import SYNTHETIC_HISTORY, headers, synthetic_comparables
+from .conftest import register as register_mentor
+from .conftest import registration as registration_body
 
 
 def registration(**overrides):
-    payload = {**REGISTRATION, **overrides}
-    payload["service"] = {**REGISTRATION["service"], **overrides.get("service", {})}
-    return payload
+    """
+    The shared registration body, with a group of two by default.
+
+    A group rather than a one-to-one session, because the comparison this
+    module is about is matched on group size and the synthetic table has
+    twelve technology mentors around that size.
+    """
+    return registration_body(**{"max_mentees": 2, **overrides})
 
 
 def register(client, **overrides):
-    response = client.post("/mentors", json=registration(**overrides))
-    assert response.status_code == 201, response.text
-    return response.json()
-
-
-def headers(mentor_id: int) -> dict[str, str]:
-    return {MENTOR_ID_HEADER: str(mentor_id)}
+    return register_mentor(client, **{"max_mentees": 2, **overrides})
 
 
 @pytest.fixture
@@ -554,7 +540,7 @@ def test_a_new_mentor_and_an_established_one_are_compared_the_same_way(
 def test_each_match_level_is_reachable_over_http(
     client, field, max_mentees, expected_level
 ):
-    body = register(client, service={"field": field, "max_mentees": max_mentees})
+    body = register(client, field=field, max_mentees=max_mentees)
     mentor_id = body["mentor"]["id"]
 
     payload = client.get(
@@ -566,7 +552,7 @@ def test_each_match_level_is_reachable_over_http(
 
 @pytest.mark.app_assets
 def test_a_thin_match_is_reported_as_widened_over_http(client):
-    body = register(client, service={"field": "medicine_health", "max_mentees": 5})
+    body = register(client, field="medicine_health", max_mentees=5)
     mentor_id = body["mentor"]["id"]
 
     summary = client.get(

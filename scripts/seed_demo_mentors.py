@@ -1,5 +1,5 @@
 """
-Seed five established mentors, so the existing-mentor path can be demonstrated.
+Seed ten established mentors, so the whole platform can be demonstrated.
 
 A mentor who has just registered is priced from eight answers and nothing
 else. A mentor with a track record is priced from those eight plus
@@ -8,23 +8,39 @@ their advice next to what they charge today. The second path is the more
 interesting half of the system and, on a fresh database, there is nobody on
 it: the platform has no activity yet, so no mentor has a record.
 
-This script supplies five. They are fictional people, and so is every word
+This script supplies ten. They are fictional people, and so is every word
 about them. What is real is the *shape* of the record: the thirty-odd figures
 are taken from one row of the modelled population, so the track records are
 internally consistent in the way a real one would be, which a hand-written
 record would not be. Rating, review counts, booked shares and tenure all
 describe the same provider.
 
-The five are chosen to be worth looking at rather than at random:
+The ten are chosen to be worth looking at rather than at random:
 
-* five different fields, so the field list is visibly in use,
-* five different group sizes, so the per-mentee figures differ, exactly one of
-  them a single mentee. Without that one, every seeded mentor runs a group
-  session and the one-to-one label never appears in the demonstration,
-* five different price levels relative to what the model advises, including
-  one mentor charging clearly above their recommended range, one inside it
-  and one below it. Those three are what make the comparison on the
-  recommendation response demonstrable at all.
+* **at least five different fields**, so the field list and the directory
+  filters are visibly in use,
+* **four one-to-one mentors and six running groups**, with the group sizes as
+  different from each other as the population allows. A session for one is not
+  a smaller group: it is the other thing the platform offers, it carries its
+  own label, and its per-mentee figure is its session price rather than a
+  division of it,
+* **one mentor charging clearly above their advised range, one inside it and
+  one below it.** Those three are what make the comparison on a
+  recommendation demonstrable at all,
+* **nine verified and one not**, so the checkmark on the directory is visibly
+  something a mentor can be without and not a decoration every card carries.
+
+Each of them gets the whole flow rather than just a profile: a service, a
+track record, an advisory price from the full model, and a decision about that
+price, so the dashboard and the history have something in them on a fresh
+database. Their month-by-month activity comes from
+``scripts/build_demo_activity.py``, which this script runs at the end unless
+told not to.
+
+They can all be signed in to. The password is read from ``DEMO_PASSWORD``, or
+is ``Pathwise-demo-1`` when that is unset, and the addresses and the password
+are printed at the end of a run: they are fictional accounts on a
+documentation domain, created to be signed in to during a demonstration.
 
 Nothing identifying is copied or stored. The names come from a fictional pool,
 the addresses are all ``example.com``, and the only link back to the source
@@ -34,8 +50,9 @@ is useless without the dataset.
 
 Run from the project root, against the database ``DATABASE_URL`` points at:
 
-    python scripts/seed_demo_mentors.py            # create the five
-    python scripts/seed_demo_mentors.py --reset    # remove them again
+    python scripts/seed_demo_mentors.py                  # create the ten
+    python scripts/seed_demo_mentors.py --no-activity    # skip the chart data
+    python scripts/seed_demo_mentors.py --reset          # remove them again
 
 Both the dataset and the prepared models are git-ignored build inputs, so a
 fresh clone cannot run this until both exist. A missing one fails with a
@@ -45,6 +62,7 @@ message naming it.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 from dataclasses import dataclass
@@ -59,6 +77,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.build_demo_activity import (  # noqa: E402
+    ActivityInputError,
+    build_activity,
+)
+from scripts.build_demo_activity import describe as describe_activity  # noqa: E402
 from src.data.population import (  # noqa: E402
     KEY_COLUMN,
     TARGET_COLUMN,
@@ -66,11 +89,16 @@ from src.data.population import (  # noqa: E402
     modelled_population,
 )
 from src.db import Mentor, MentorHistory, Service, create_db_engine  # noqa: E402
-from src.mentor import mapping  # noqa: E402
+from src.db.mentor_models import (  # noqa: E402
+    PricingDecision,
+    PricingRecommendation,
+)
+from src.mentor import mapping, security  # noqa: E402
 from src.mentor.prediction import (  # noqa: E402
     FULL,
     POSITION_ABOVE,
     POSITION_BELOW,
+    POSITION_WITHIN,
     AssetsUnavailableError,
     PriceRecommendation,
     PricingService,
@@ -84,7 +112,31 @@ from src.mentor.prediction import (  # noqa: E402
 # mentor offers. The project uses 42 everywhere else for the same reason.
 SEED = 42
 
-DEMO_MENTORS = 5
+DEMO_MENTORS = 10
+
+# Four of the ten take a single mentee and six take a group. Both numbers are
+# here rather than in the selection code because they are the shape of the
+# demonstration rather than a detail of how it is assembled.
+ONE_TO_ONE_MENTORS = 4
+GROUP_MENTORS = DEMO_MENTORS - ONE_TO_ONE_MENTORS
+
+# The fewest different fields the ten may cover. Ten different ones would be
+# better and the selection prefers them, but only part of the population
+# offers a session for one mentee and those rows do not cover every field, so
+# a hard requirement of ten would fail on a dataset rather than describe one.
+MIN_FIELDS = 5
+
+# Nine of the ten are verified. The tenth is not, so that the checkmark on the
+# directory is visibly something a mentor can be without: a list where every
+# card carries it says nothing about any of them.
+UNVERIFIED_MENTORS = 1
+
+# What the demonstration accounts sign in with. Read from the environment so a
+# shared demonstration can use something else, with a default that is printed
+# at the end of every run. These are fictional accounts on a domain reserved
+# for documentation, created to be signed in to.
+DEMO_PASSWORD_VARIABLE = "DEMO_PASSWORD"
+DEFAULT_DEMO_PASSWORD = "Pathwise-demo-1"
 
 # ---------------------------------------------------------------------------
 # The population
@@ -248,15 +300,15 @@ FIELD_PROFILES: dict[str, FieldProfile] = {
 }
 
 # ---------------------------------------------------------------------------
-# What the five are chosen to show
+# What the ten are chosen to show
 #
 # Five price levels, read as the ratio of what the mentor charges today to
-# what the model advises. The first three are the whole point of the exercise:
+# what the model advises. The three outer ones are the point of the exercise:
 # the recommendation response reports whether a mentor's current price is
 # below, within or above their advised range, and that claim is only
 # demonstrable if there is a mentor in each case.
 #
-# The two middle bands exist so the five do not all sit on top of each other
+# The two middle bands exist so the ten do not all sit on top of each other
 # inside the range. They are expressed against the range multipliers rather
 # than as fixed ratios, so they keep their meaning if a retrained model comes
 # with a wider or narrower range.
@@ -275,31 +327,43 @@ TARGET_BANDS: tuple[str, ...] = (
     BAND_BELOW,
 )
 
-# ---------------------------------------------------------------------------
-# The one-to-one mentor
-#
-# One of the five takes a single mentee and the other four take two or more.
-# A session for one is not a smaller group: it is the other thing the platform
-# offers, it carries its own label, and its per-mentee figure is its session
-# price rather than a division of it. Five group sessions would leave both of
-# those unrepresented.
-#
-# Which price level it occupies is a preference rather than a rule, because
-# only a small part of the population offers a session for one. The three
-# levels inside the range come first, since a mentor charging roughly what the
-# system advises is the ordinary case and the least informative one to spend
-# on a constraint; the two outside it are the fallback, and are given up last
-# because they are the cases the comparison exists to show.
-# ---------------------------------------------------------------------------
+# The three the comparison exists to show. One mentor in each is a
+# requirement rather than a preference: without them the demonstration cannot
+# show what the comparison is for.
+REQUIRED_POSITIONS: tuple[str, ...] = (
+    POSITION_BELOW,
+    POSITION_WITHIN,
+    POSITION_ABOVE,
+)
+
 SINGLE_MENTEE = mapping.MAX_MENTEES_MIN
 
-ONE_TO_ONE_BAND_PREFERENCE: tuple[str, ...] = (
-    BAND_MIDDLE,
-    BAND_HIGH,
-    BAND_LOW,
-    BAND_ABOVE,
-    BAND_BELOW,
-)
+# ---------------------------------------------------------------------------
+# What the mentor did about their price
+#
+# Each seeded mentor has answered the advice once, so the dashboard, the
+# history and the decision counts have something in them on a fresh database.
+# Which answer they gave follows from where their own price sits, because that
+# is the answer that is consistent with it:
+#
+# * a mentor charging roughly what the model advises has accepted it, and
+#   their price becomes the advised one,
+# * a mentor charging clearly more or less than the advised range has
+#   rejected the advice and said what they charge instead, which is the most
+#   useful thing a mentor can tell the system,
+# * the two in between have modified it to their own figure.
+#
+# A mentor whose own price happens to equal the advice to the currency unit
+# has accepted it, whichever band they fall in: a modification has to differ
+# from the advice, and the endpoint that records one would refuse it.
+# ---------------------------------------------------------------------------
+ACTION_FOR_BAND: dict[str, str] = {
+    BAND_MIDDLE: "accepted",
+    BAND_HIGH: "modified",
+    BAND_LOW: "modified",
+    BAND_ABOVE: "rejected",
+    BAND_BELOW: "rejected",
+}
 
 
 class SeedInputError(RuntimeError):
@@ -322,7 +386,6 @@ class Candidate:
     min_commitment: int
     skills: list[str]
     profile_verified: bool
-    services_planned: int
     current_price: int
     history: dict[str, Any]
     advice: PriceRecommendation
@@ -440,10 +503,12 @@ def mentor_terms(source_key: int, row: pd.Series) -> dict[str, Any]:
             source_key,
             mapping.skills_count_from_column_value(row[mapping.COLUMN_SKILLS]),
         ),
-        "profile_verified": bool(row[mapping.COLUMN_VERIFIED]),
-        "services_planned": min(
-            max(int(row[mapping.COLUMN_SERVICES]), 1), mapping.SERVICES_CAP
-        ),
+        # Not read from the row. Verification is the platform's own
+        # statement about a mentor, and these mentors are the platform's own
+        # invention: nine of the ten are verified, so every candidate is
+        # scored as one, and the tenth is priced again with the answer turned
+        # off when it is written. See advice_for.
+        "profile_verified": True,
         "current_price": int(round(float(row[TARGET_COLUMN]))),
         "history": mapping.model_inputs_to_history(
             {column: row[column] for column in mapping.FULL_COLUMNS}
@@ -451,23 +516,64 @@ def mentor_terms(source_key: int, row: pd.Series) -> dict[str, Any]:
     }
 
 
-def model_row(terms: dict[str, Any]) -> dict[str, Any]:
+def model_row(
+    terms: dict[str, Any], *, profile_verified: bool | None = None
+) -> dict[str, Any]:
     """
     The full-model row for a described mentor, exactly as the API builds it.
 
     One published service, so the service count is one. Anything else here
-    would choose the five on a price the endpoints then disagree with.
+    would choose the ten on a price the endpoints then disagree with.
+
+    ``profile_verified`` overrides the described answer, for the one seeded
+    mentor who is not verified: their price has to be the price of a mentor
+    who has not been checked, because that is what their service will say.
     """
     service_inputs = mapping.to_model_inputs(
         field=terms["field"],
         max_mentees=terms["max_mentees"],
         min_commitment=terms["min_commitment"],
         skills=terms["skills"],
-        profile_verified=terms["profile_verified"],
-        services_planned=terms["services_planned"],
+        profile_verified=(
+            terms["profile_verified"] if profile_verified is None else profile_verified
+        ),
         services_count=1,
     )
     return {**service_inputs, **mapping.history_to_model_inputs(terms["history"])}
+
+
+def model_row_for(candidate: Candidate, *, verified: bool) -> dict[str, Any]:
+    """
+    The full-model row behind one seeded mentor's stored price.
+
+    Stored on the recommendation as its input snapshot, which is what the API
+    does with the row it builds, so a seeded price can be explained months
+    later from the row alone.
+    """
+    return model_row(
+        {
+            "field": candidate.field,
+            "max_mentees": candidate.max_mentees,
+            "min_commitment": candidate.min_commitment,
+            "skills": candidate.skills,
+            "profile_verified": candidate.profile_verified,
+            "history": candidate.history,
+        },
+        profile_verified=verified,
+    )
+
+
+def advice_for(candidate: Candidate, *, verified: bool) -> PriceRecommendation:
+    """
+    What the full model says about one candidate, verified or not.
+
+    Through the same prediction service and the same mapping layer as the API,
+    so a seeded mentor's stored price is the price the endpoints go on to give
+    for the same service.
+    """
+    return pricing_service().predict_many(
+        [model_row_for(candidate, verified=verified)], FULL
+    )[0]
 
 
 def build_candidates(population: pd.DataFrame) -> list[Candidate]:
@@ -475,7 +581,7 @@ def build_candidates(population: pd.DataFrame) -> list[Candidate]:
     Every row of the population as a candidate, with the advice it would get.
 
     Scored in one call rather than one per row. There are thousands of
-    candidates and the five are chosen on what the model says about them, so
+    candidates and the ten are chosen on what the model says about them, so
     the alternative is thousands of single-row model calls to arrive at the
     same numbers.
     """
@@ -492,16 +598,22 @@ def build_candidates(population: pd.DataFrame) -> list[Candidate]:
 
 
 # ---------------------------------------------------------------------------
-# Choosing the five
+# Choosing the ten
 # ---------------------------------------------------------------------------
-def band_of(candidate: Candidate) -> str:
-    """Which of the five price levels a candidate sits at."""
-    position = candidate.position
+def band_for(current_price: int, advice: PriceRecommendation) -> str:
+    """
+    Which of the five price levels a price sits at, against one piece of advice.
+
+    Takes the price and the advice rather than a candidate, because the one
+    seeded mentor who is not verified is priced again after the ten are chosen
+    and their band has to be read off the advice they actually keep.
+    """
+    position = position_vs_range(current_price, advice.price_low, advice.price_high)
     if position == POSITION_ABOVE:
         return BAND_ABOVE
     if position == POSITION_BELOW:
         return BAND_BELOW
-    ratio = candidate.price_ratio
+    ratio = current_price / advice.recommended_price
     if ratio > 1.15:
         return BAND_HIGH
     if ratio < 0.87:
@@ -509,83 +621,162 @@ def band_of(candidate: Candidate) -> str:
     return BAND_MIDDLE
 
 
-def first_fit(
-    pool: list[Candidate],
-    used_fields: set[str],
-    used_sizes: set[int],
+def band_of(candidate: Candidate) -> str:
+    """Which of the five price levels a candidate sits at."""
+    return band_for(candidate.current_price, candidate.advice)
+
+
+class Selection:
+    """
+    The ten being assembled, and what has already been spent on them.
+
+    A small object rather than four sets passed between functions, because
+    every rule about the ten is a rule about the whole set: a field is only
+    worth taking once, a group size is only interesting once, and a price
+    position only has to be covered once.
+    """
+
+    def __init__(self) -> None:
+        self.chosen: list[Candidate] = []
+        self.keys: set[int] = set()
+        self.fields: set[str] = set()
+        self.sizes: set[int] = set()
+
+    def take(self, candidate: Candidate) -> Candidate:
+        self.chosen.append(candidate)
+        self.keys.add(candidate.source_key)
+        self.fields.add(candidate.field)
+        self.sizes.add(candidate.max_mentees)
+        return candidate
+
+    def positions(self) -> set[str]:
+        return {candidate.position for candidate in self.chosen}
+
+    def singles(self) -> int:
+        return sum(
+            1 for candidate in self.chosen if candidate.max_mentees == SINGLE_MENTEE
+        )
+
+    def groups(self) -> int:
+        return len(self.chosen) - self.singles()
+
+
+def fits(
+    candidate: Candidate,
+    selection: Selection,
     *,
     single_mentee: bool,
+    position: str | None,
+    new_field: bool,
+    new_size: bool,
+) -> bool:
+    """Whether one candidate is still wanted, under the rules asked for."""
+    if candidate.source_key in selection.keys:
+        return False
+    if single_mentee != (candidate.max_mentees == SINGLE_MENTEE):
+        return False
+    if position is not None and candidate.position != position:
+        return False
+    if new_field and candidate.field in selection.fields:
+        return False
+    if new_size and candidate.max_mentees in selection.sizes:
+        return False
+    return True
+
+
+def first_fit(
+    pool: list[Candidate],
+    selection: Selection,
+    *,
+    single_mentee: bool,
+    position: str | None = None,
 ) -> Candidate | None:
     """
-    The first candidate in ``pool`` that none of the five already covers.
+    The first candidate in ``pool`` that is still wanted, relaxing in order.
 
-    ``single_mentee`` picks which side of the group-size split to draw from:
-    the one-to-one mentor, or one of the four who take a group.
+    Three passes, each giving up one preference. A different field and a
+    different group size are what make the ten worth looking at, but neither
+    is worth failing over: only part of the population offers a session for
+    one mentee, those rows do not cover every field, and there are seven group
+    sizes for six group mentors. So the search asks for both, then for a new
+    field alone, then for anything that fits the quota it is filling. The
+    requirements that are not relaxed are the quotas themselves and the three
+    price positions.
     """
-    return next(
-        (
-            candidate
-            for candidate in pool
-            if candidate.field not in used_fields
-            and candidate.max_mentees not in used_sizes
-            and (
-                candidate.max_mentees == SINGLE_MENTEE
-                if single_mentee
-                else candidate.max_mentees >= mapping.GROUP_FROM_MENTEES
-            )
-        ),
-        None,
-    )
+    for new_field, new_size in ((True, True), (True, False), (False, False)):
+        for candidate in pool:
+            if fits(
+                candidate,
+                selection,
+                single_mentee=single_mentee,
+                position=position,
+                new_field=new_field,
+                new_size=new_size,
+            ):
+                return candidate
+    return None
 
 
 def choose(candidates: list[Candidate]) -> tuple[list[Candidate], list[str]]:
     """
-    Five candidates, one per price level, all in different fields and sizes.
+    Ten candidates: four one-to-one, six groups, three price positions covered.
 
-    Deterministic: the candidates are visited in one seeded order and the
-    first that fits each band is taken. Seeded rather than taken in dataset
-    order because dataset order correlates with the market segment, and the
-    first matching rows would all come from the same few fields.
+    Deterministic: the candidates are visited in one seeded order and the first
+    that fits is taken. Seeded rather than taken in dataset order because
+    dataset order correlates with the market segment, and the first matching
+    rows would all come from the same few fields.
 
-    The one-to-one mentor is chosen before the loop rather than inside it, and
-    their field and group size are reserved. Choosing them in band order would
-    not work: whichever band they land in, the bands picked before it would
-    have already spent the field they need, with no way to know it was wanted.
+    The three price positions are filled first, from the group mentors, and
+    only then are the quotas filled out. Filling the quotas first would spend
+    the fields and the sizes on ordinary mentors and leave the one case the
+    comparison exists to show with nothing to take.
 
-    Returns the five and the bands that could not be filled, so the caller can
-    say so rather than quietly seeding four.
+    Returns the chosen and a list of what could not be satisfied, so the
+    caller can say so rather than quietly seeding eight.
     """
     order = list(range(len(candidates)))
     random.Random(SEED).shuffle(order)
-    by_band: dict[str, list[Candidate]] = {band: [] for band in TARGET_BANDS}
-    for index in order:
-        candidate = candidates[index]
-        by_band[band_of(candidate)].append(candidate)
+    pool = [candidates[index] for index in order]
 
-    used_fields: set[str] = set()
-    used_sizes: set[int] = set()
-    reserved: dict[str, Candidate] = {}
-    for band in ONE_TO_ONE_BAND_PREFERENCE:
-        pick = first_fit(by_band[band], used_fields, used_sizes, single_mentee=True)
-        if pick is not None:
-            reserved[band] = pick
-            used_fields.add(pick.field)
-            used_sizes.add(pick.max_mentees)
-            break
+    selection = Selection()
+    unmet: list[str] = []
 
-    chosen: list[Candidate] = []
-    unfilled: list[str] = []
-    for band in TARGET_BANDS:
-        pick = reserved.get(band) or first_fit(
-            by_band[band], used_fields, used_sizes, single_mentee=False
-        )
+    # One group mentor per price position, in a fixed order.
+    for position in REQUIRED_POSITIONS:
+        pick = first_fit(pool, selection, single_mentee=False, position=position)
         if pick is None:
-            unfilled.append(band)
+            unmet.append(f"a group mentor charging {position} their advised range")
             continue
-        chosen.append(pick)
-        used_fields.add(pick.field)
-        used_sizes.add(pick.max_mentees)
-    return chosen, unfilled
+        selection.take(pick)
+
+    # The rest of the six group mentors, then the four one-to-one mentors.
+    for single_mentee, wanted in ((False, GROUP_MENTORS), (True, ONE_TO_ONE_MENTORS)):
+        filling = selection.groups if not single_mentee else selection.singles
+        while filling() < wanted:
+            pick = first_fit(pool, selection, single_mentee=single_mentee)
+            if pick is None:
+                shape = "one-to-one" if single_mentee else "group"
+                unmet.append(
+                    f"{wanted - filling()} more {shape} mentor(s): the "
+                    f"population has no further record that fits"
+                )
+                break
+            selection.take(pick)
+
+    if len(selection.fields) < MIN_FIELDS:
+        unmet.append(
+            f"mentors in at least {MIN_FIELDS} different fields: these ten "
+            f"cover {len(selection.fields)}"
+        )
+    missing = [
+        position
+        for position in REQUIRED_POSITIONS
+        if position not in selection.positions()
+    ]
+    for position in missing:
+        unmet.append(f"any mentor charging {position} their advised range")
+
+    return selection.chosen, unmet
 
 
 def names_for(count: int) -> list[str]:
@@ -614,6 +805,89 @@ def email_for(display_name: str, source_key: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# What will be written for each of the ten
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Plan:
+    """
+    One seeded mentor, decided in full before anything is written.
+
+    Everything that is not simply read off the source record: the fictional
+    name, whether the platform has checked them, the advice they are given
+    once that is settled, and what they did about it. Held as a value so the
+    summary printed at the end describes the rows that were actually written
+    rather than recomputing anything.
+    """
+
+    candidate: Candidate
+    display_name: str
+    verified: bool
+    advice: PriceRecommendation
+    action: str
+    final_price: int
+
+    @property
+    def email(self) -> str:
+        return email_for(self.display_name, self.candidate.source_key)
+
+    @property
+    def position(self) -> str:
+        """Where what they charge sits against the range they were advised."""
+        return position_vs_range(
+            self.final_price, self.advice.price_low, self.advice.price_high
+        )
+
+
+def plan_for(chosen: list[Candidate]) -> list[Plan]:
+    """
+    Decide the whole of each of the ten, in one deterministic pass.
+
+    Two things are settled here rather than during the selection, and both
+    depend on the set being complete:
+
+    **Which of them is not verified.** The last of the ten, so the nine that
+    carry the three price positions and the field spread are untouched by it.
+    Their price is then worked out again with the answer turned off, because
+    the price a mentor is shown has to be the price of the service they
+    actually have.
+
+    **What each of them did about their advice.** It follows from where their
+    own price sits: see ACTION_FOR_BAND. A mentor whose price happens to equal
+    the advice has accepted it whatever band they fall in, because a
+    modification has to differ from the advice and the endpoint that records
+    one would refuse it.
+    """
+    names = names_for(len(chosen))
+    verified_flags = [
+        index < len(chosen) - UNVERIFIED_MENTORS for index in range(len(chosen))
+    ]
+
+    plans: list[Plan] = []
+    for candidate, display_name, verified in zip(
+        chosen, names, verified_flags, strict=True
+    ):
+        advice = candidate.advice if verified else advice_for(candidate, verified=False)
+        advised = advice.recommended_price
+        current = candidate.current_price
+        action = (
+            "accepted"
+            if current == advised
+            else ACTION_FOR_BAND[band_for(current, advice)]
+        )
+        plans.append(
+            Plan(
+                candidate=candidate,
+                display_name=display_name,
+                verified=verified,
+                advice=advice,
+                action=action,
+                final_price=advised if action == "accepted" else current,
+            )
+        )
+    return plans
+
+
+# ---------------------------------------------------------------------------
 # Writing them
 # ---------------------------------------------------------------------------
 def existing_source_keys(session: Session) -> set[int]:
@@ -627,37 +901,89 @@ def existing_source_keys(session: Session) -> set[int]:
     }
 
 
-def seed_one(session: Session, candidate: Candidate, display_name: str) -> Mentor:
-    """Create one demonstration mentor, with a service and a track record."""
+def years_of_experience(candidate: Candidate) -> int:
+    """
+    How long the mentor says they have been mentoring, in whole years.
+
+    Taken from the tenure in their own record and rounded, so the number on
+    their profile and the band shown beside it agree with each other and with
+    the record the full model reads. At least one year: a mentor with a
+    complete track record has been doing this for a while, and a profile
+    reading "under 1 year" beside forty reviews would contradict itself.
+    """
+    tenure = float(candidate.history[mapping.HISTORY_TENURE_FIELD])
+    return min(max(int(round(tenure)), 1), mapping.YEARS_EXPERIENCE_MAX)
+
+
+def seed_one(session: Session, plan: Plan, password_hash: str) -> Mentor:
+    """
+    Create one demonstration mentor, with everything the flow produces.
+
+    A profile, a service, a track record, the advisory price the full model
+    gives that service, and the mentor's answer to it. The last two are
+    written here rather than left for someone to click, so that a fresh
+    database has a dashboard, a history and a decision count with something in
+    them.
+
+    The price is not decided here: it comes from the prediction service,
+    through the same mapping layer the API uses, and the row it was worked out
+    from is stored beside it.
+    """
+    candidate = plan.candidate
     profile = FIELD_PROFILES[candidate.field]
+    years = years_of_experience(candidate)
     mentor = Mentor(
-        full_name=display_name,
-        email=email_for(display_name, candidate.source_key),
+        full_name=plan.display_name,
+        email=plan.email,
+        password_hash=password_hash,
+        verified=plan.verified,
         headline=profile.headline,
         bio=profile.bio,
         education_level=profile.education_level,
         experience_summary=profile.bio,
         credentials=None,
-        years_mentoring_band=mapping.years_mentoring_band_for_tenure(
-            candidate.history[mapping.HISTORY_TENURE_FIELD]
-        ),
-        services_planned=candidate.services_planned,
+        years_experience=years,
+        years_mentoring_band=mapping.years_mentoring_band_for_experience(years),
         is_demo=True,
         source_key=candidate.source_key,
     )
-    mentor.services.append(
-        Service(
-            session_label=mapping.session_label(candidate.max_mentees),
-            field=candidate.field,
-            max_mentees=candidate.max_mentees,
-            min_commitment=candidate.min_commitment,
-            skills=list(candidate.skills),
-            profile_verified=candidate.profile_verified,
-            current_price=candidate.current_price,
-        )
+    service = Service(
+        session_label=mapping.session_label(candidate.max_mentees),
+        field=candidate.field,
+        max_mentees=candidate.max_mentees,
+        min_commitment=candidate.min_commitment,
+        skills=list(candidate.skills),
+        # The same answer as the account, because they are the same claim and
+        # this is the one the model reads.
+        profile_verified=plan.verified,
+        current_price=plan.final_price,
     )
+    mentor.services.append(service)
     mentor.history = MentorHistory(**candidate.history)
     session.add(mentor)
+    session.flush()
+
+    advice = plan.advice
+    recommendation = PricingRecommendation(
+        service_id=service.id,
+        model_used=advice.model_used,
+        recommended_price=advice.recommended_price,
+        price_low=advice.price_low,
+        price_high=advice.price_high,
+        low_confidence=advice.low_confidence,
+        inputs_snapshot=model_row_for(candidate, verified=plan.verified),
+        model_version=advice.model_version,
+        status=plan.action,
+    )
+    session.add(recommendation)
+    session.flush()
+    session.add(
+        PricingDecision(
+            recommendation_id=recommendation.id,
+            action=plan.action,
+            final_price=plan.final_price,
+        )
+    )
     return mentor
 
 
@@ -680,32 +1006,62 @@ def reset(session: Session) -> int:
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
-def summary_table(rows: list[tuple[str, Candidate]]) -> str:
-    """The five mentors as a table, in the words the application uses."""
+def summary_table(plans: list[Plan]) -> str:
+    """The ten mentors as a table, in the words the application uses."""
     header = (
-        f"{'Mentor':14s} {'Field':30s} {'Group':>5s} {'Now':>8s} "
-        f"{'Advice':>8s} {'Range':>17s} {'Model':>6s}  Position"
+        f"{'Mentor':14s} {'Field':30s} {'Group':>5s} {'Charges':>8s} "
+        f"{'Advice':>8s} {'Range':>17s} {'Answer':>9s} {'Checked':>7s}  Position"
     )
     lines = [header, "-" * len(header)]
-    for display_name, candidate in rows:
-        advice = candidate.advice
+    for plan in plans:
+        advice = plan.advice
         band = f"{advice.price_low:,} to {advice.price_high:,}"
         lines.append(
-            f"{display_name:14s} {mapping.field_label(candidate.field):30s} "
-            f"{candidate.max_mentees:5d} {candidate.current_price:8,d} "
+            f"{plan.display_name:14s} "
+            f"{mapping.field_label(plan.candidate.field):30s} "
+            f"{plan.candidate.max_mentees:5d} {plan.final_price:8,d} "
             f"{advice.recommended_price:8,d} {band:>17s} "
-            f"{advice.model_used:>6s}  {candidate.position}"
+            f"{plan.action:>9s} {'yes' if plan.verified else 'no':>7s}  "
+            f"{plan.position}"
         )
     lines.append("")
     lines.append(f"Prices in {mapping.CURRENCY}, per session.")
     return "\n".join(lines)
 
 
+def demo_password() -> str:
+    """
+    What the demonstration accounts sign in with.
+
+    From the environment, so a shared demonstration can use something else,
+    with a documented default. It is printed at the end of a run on purpose:
+    these are fictional accounts on a domain reserved for documentation, and
+    they exist to be signed in to.
+    """
+    return os.environ.get(DEMO_PASSWORD_VARIABLE) or DEFAULT_DEMO_PASSWORD
+
+
+def sign_in_details(plans: list[Plan], password: str) -> str:
+    """The addresses and the password, for whoever is running the demo."""
+    lines = ["Sign in as any of them with the password below.", ""]
+    for plan in plans:
+        lines.append(f"  {plan.email}")
+    lines.append("")
+    lines.append(f"  password: {password}")
+    lines.append("")
+    lines.append(
+        f"These are fictional accounts on example.com, which can never belong "
+        f"to anyone. Set {DEMO_PASSWORD_VARIABLE} to use a different password."
+    )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Seed five established mentors, each with a track record, so the "
-            "existing-mentor pricing path can be demonstrated."
+            "Seed ten established mentors, each with a track record, a price "
+            "and a decision, so the whole platform can be demonstrated on a "
+            "fresh database."
         )
     )
     parser.add_argument(
@@ -716,9 +1072,19 @@ def main(argv: list[str] | None = None) -> int:
             "them, and seed nothing"
         ),
     )
+    parser.add_argument(
+        "--no-activity",
+        action="store_true",
+        help=(
+            "do not build the month-by-month activity, which reads the raw "
+            "files and is the slow part"
+        ),
+    )
     arguments = parser.parse_args(argv)
 
+    password = demo_password()
     engine = create_db_engine()
+    activity: str | None = None
     try:
         with Session(engine, expire_on_commit=False) as session:
             if arguments.reset:
@@ -726,25 +1092,31 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Removed {removed} demonstration mentor(s).")
                 return 0
 
-            candidates = build_candidates(load_population())
-            chosen, unfilled = choose(candidates)
+            chosen, unmet = choose(build_candidates(load_population()))
+            plans = plan_for(chosen)
             already = existing_source_keys(session)
 
-            rows: list[tuple[str, Candidate]] = []
             created = 0
-            for display_name, candidate in zip(
-                names_for(len(chosen)), chosen, strict=True
-            ):
-                if candidate.source_key in already:
-                    mentor = session.scalar(
-                        select(Mentor).where(Mentor.source_key == candidate.source_key)
-                    )
-                    rows.append((mentor.full_name, candidate))
+            for plan in plans:
+                if plan.candidate.source_key in already:
                     continue
-                seed_one(session, candidate, display_name)
-                rows.append((display_name, candidate))
+                # One hash per mentor rather than one shared between them.
+                # They all sign in with the same password, but a salt reused
+                # across rows is a habit worth not having in a codebase.
+                seed_one(session, plan, security.hash_password(password))
                 created += 1
             session.commit()
+
+            if not arguments.no_activity:
+                try:
+                    activity = describe_activity(build_activity(session))
+                except ActivityInputError as error:
+                    activity = (
+                        f"The month-by-month activity was not built, so the "
+                        f"chart on a mentor's page has nothing in it yet:\n"
+                        f"  {error}\n"
+                        f"  Build it with python scripts/build_demo_activity.py."
+                    )
     except SeedInputError as error:
         print(f"FAILED: {error}", file=sys.stderr)
         return 1
@@ -753,25 +1125,22 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"{created} demonstration mentor(s) created, "
-        f"{len(rows) - created} already present."
+        f"{len(plans) - created} already present."
     )
     print()
-    print(summary_table(rows))
-
-    if unfilled:
+    print(summary_table(plans))
+    print()
+    print(sign_in_details(plans, password))
+    if activity:
+        print()
+        print(activity)
+    if unmet:
         print()
         print(
-            "Could not find a candidate for: "
-            + ", ".join(unfilled)
-            + ". The population has no record at that price level with a field "
-            "and group size the other mentors are not already using."
-        )
-    if rows and all(candidate.max_mentees > SINGLE_MENTEE for _, candidate in rows):
-        print()
-        print(
-            "No record in the population offers a session for a single mentee "
-            "in a field the other mentors are not using, so all five are "
-            "group sessions and the one-to-one label is not demonstrated."
+            "The population could not supply: "
+            + "; ".join(unmet)
+            + ". The demonstration is short of what it was meant to show, so "
+            "say so rather than reading the table above as the whole picture."
         )
     return 0
 

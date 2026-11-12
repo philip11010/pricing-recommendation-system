@@ -39,6 +39,17 @@ MASTER_DATASET = PROJECT_ROOT / "data" / "processed" / "master_listings.parquet"
 # The key column this module adds. Not a column of the dataset.
 KEY_COLUMN = "key"
 
+# The identifier each row of the dataset carries. Named here so that the one
+# build script which has to join the raw files back to a row can do it without
+# spelling the column itself, and so that this is the only place in the
+# codebase where it appears at all.
+#
+# It never leaves a build script: it is not written to the database, not
+# returned by any endpoint and not logged. :data:`KEY_COLUMN` exists precisely
+# so that nothing downstream needs it, and a key is useless without the
+# git-ignored dataset.
+SOURCE_ID_COLUMN = "id"
+
 # The two dataset columns named here are not model inputs: one is the
 # prediction target and one is the scope flag the training run split on.
 # Every column that *is* a model input is referred to through

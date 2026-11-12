@@ -47,7 +47,7 @@ The three build scripts go in this order, and the order matters:
 ```bash
 python scripts/prepare_app_assets.py    # 1. the models and their metadata
 python scripts/build_comparables.py     # 2. the mentors a price is compared with
-python scripts/seed_demo_mentors.py     # 3. five mentors with a track record
+python scripts/seed_demo_mentors.py     # 3. ten mentors with a track record
 ```
 
 Step 1 comes first because both of the others read the price fences out of the
@@ -151,16 +151,27 @@ explanation rather than failing.
 
 On a fresh database every mentor is a new mentor, because nobody has taken a
 session yet. The existing-mentor half of the system therefore has nobody on it
-and cannot be shown. This step supplies five established mentors:
+and cannot be shown. This step supplies ten established mentors:
 
 ```bash
-python scripts/seed_demo_mentors.py            # create the five
-python scripts/seed_demo_mentors.py --reset    # remove them again
+python scripts/seed_demo_mentors.py                  # create the ten
+python scripts/seed_demo_mentors.py --no-activity    # skip the chart data
+python scripts/seed_demo_mentors.py --reset          # remove them again
 ```
 
 It prints a table of what it wrote: the mentor, their field, their group size,
-what they charge today, the advised price and range, and whether what they
-charge is below, within or above that range.
+what they charge, the advised price and range, what they decided about it,
+whether they are verified, and whether what they charge is below, within or
+above that range. It then prints their addresses and the password they all
+sign in with.
+
+Each of them gets the whole flow rather than just a profile: a service, a
+track record, an advisory price from the full model and a decision about that
+price, so the dashboard, the history and the decision counts have something in
+them on a fresh database. The answers follow from what each mentor charges: a
+mentor charging roughly what the model advises has accepted it, one charging
+clearly more or less has rejected it and said what they charge instead, and
+the two in between have modified it.
 
 Each seeded mentor carries a `source_key`, the key described above, so they are
 left out of their own comparison. A mentor compared against themselves would be
@@ -174,28 +185,51 @@ python scripts/seed_demo_mentors.py --reset
 python scripts/seed_demo_mentors.py
 ```
 
-The five are chosen from the population the models were fitted on, so each
+The ten are chosen from the population the models were fitted on, so each
 one's track record is internally consistent in the way a real one is: rating,
 review counts, booked shares and tenure all describe the same provider. They
-are chosen to be worth looking at rather than at random, with five different
-fields, five different group sizes, and five different price levels relative
-to the advice. One of them charges clearly above their recommended range, one
-within it and one below it, which is what makes the comparison on a
-recommendation demonstrable.
+are chosen to be worth looking at rather than at random:
 
-Exactly one of the five takes a single mentee and the other four take two or
-more, so both session labels appear. A session for one is not a smaller group:
-it is labelled `one_to_one` rather than `group`, and its per-mentee figures
-equal its session figures rather than being a division of them. The one-to-one
-mentor is given one of the three price levels inside the range where the
-population allows it, because the two levels outside the range are the cases
-the comparison exists to show and are better spent on a group mentor. The
-script says so in its output if the population cannot supply a one-to-one
-mentor at all.
+- **at least five different fields**, so the field list and the directory
+  filters are visibly in use,
+- **four one-to-one mentors and six running groups**, with six different group
+  sizes between two and eight. A session for one is not a smaller group: it is
+  labelled `one_to_one` rather than `group`, and its per-mentee figures equal
+  its session figures rather than being a division of them,
+- **one mentor charging clearly above their advised range, one within it and
+  one below it**, which is what makes the comparison on a recommendation
+  demonstrable,
+- **nine verified and one not**, so the checkmark on the directory is visibly
+  something a mentor can be without rather than a decoration every card
+  carries. The tenth is priced as an unverified mentor, because verification is
+  one of the eight inputs behind a price.
 
-The people are fictional. The names come from a fixed pool and are a first
-name and an initial, every address is at `example.com`, and the profile text
-is a template per field. Nothing identifying is copied from the dataset: the
+The script says in its output if the population cannot supply one of those,
+rather than quietly seeding something smaller.
+
+Their month-by-month activity is a separate build, because it reads the raw
+files rather than the processed dataset. The seed runs it at the end unless
+`--no-activity` is passed, and it can be run on its own:
+
+```bash
+python scripts/build_demo_activity.py
+python scripts/build_demo_activity.py --months 6
+```
+
+It writes one row per mentor per month for the last twelve complete months. It
+reports what it could not build rather than filling it in: in the export this
+project was built on, reviews per month are real measurements, while the
+booked share and the price per month are not available, because the
+availability file is a forward-looking snapshot of the coming year and has no
+price column. Those entries are left empty, and the endpoint that serves them
+returns null rather than zero. Ratings over time do not exist in the sources at
+all and are not shown.
+
+The people are fictional, and they are accounts: each one has a password, so
+whoever is running the demonstration signs in as one of them. See
+"Authentication and demo accounts" below. The names come from a fixed pool and
+are a first name and an initial, every address is at `example.com`, and the
+profile text is a template per field. Nothing identifying is copied from the dataset: the
 only link back to a source row is `source_key`, a position in the filtered
 population, which exists so that running the script twice recognises the
 mentors it already wrote. Running it again creates nothing; `--reset` removes
@@ -203,29 +237,119 @@ the seeded mentors and everything belonging to them and leaves mentors who
 registered alone.
 
 It needs both the prepared models and the processed dataset, and fails with
-the name of whichever is missing. Both are git-ignored.
+the name of whichever is missing. The activity build also needs the raw
+reviews and availability files. All of them are git-ignored.
+
+## Authentication and demo accounts
+
+A mentor registers with an email address and a password and is given a signed
+access token. Every request about their own records carries it as
+`Authorization: Bearer <token>`. There are no cookies and no session table: the
+token carries the mentor's id and an expiry, signed, and lasts seven days.
+
+**Signing out is the client discarding the token.** There is no logout
+endpoint, because the server holds no session to end. A token that has already
+been issued stays valid until it expires, which is why it expires in a week
+rather than a year.
+
+Passwords are hashed with Argon2id, between 8 and 128 characters. A wrong
+password and an address nobody has registered give the same answer and take
+about the same time to give it, so the sign-in form cannot be used to find out
+who has an account.
+
+| Method | Path             | Purpose                                     |
+| ------ | ---------------- | ------------------------------------------- |
+| POST   | `/auth/register` | Create the account, profile and first service |
+| POST   | `/auth/login`    | Exchange an address and password for a token |
+| GET    | `/auth/me`       | Who the current token belongs to             |
+
+Configuration, all read from the environment or `.env`:
+
+- `SECRET_KEY` signs the tokens. **If `ENVIRONMENT` is `production` and it is
+  missing or shorter than 32 characters, the server refuses to start**, because
+  the alternative is a server that issues forgeable tokens while answering
+  `/health` perfectly happily. In development a key is generated at startup
+  and one warning line says so; the tokens issued before a restart stop
+  working after it.
+- `ENVIRONMENT` is `development` unless it is set to `production`.
+- `DEMO_PASSWORD` is what the seeded demonstration accounts sign in with,
+  defaulting to `Pathwise-demo-1`. The seed prints the addresses and the
+  password at the end of a run: they are fictional accounts on `example.com`,
+  which can never belong to anyone, created to be signed in to.
+
+**New accounts are not verified.** Verification is what the platform says about
+a mentor after a person has checked who they are, so nothing a mentor sends can
+set it, including at registration. One script does:
+
+```bash
+python scripts/verify_mentor.py mentor@example.com
+python scripts/verify_mentor.py mentor@example.com --revoke
+```
+
+It sets the flag on the account and on each of that mentor's services, which
+is the same claim in the form the model reads, so a mentor shown with a
+checkmark is also priced as one. Prices already given are left alone: the
+mentor answered those.
 
 ### Endpoints
 
-| Method | Path                                     | Purpose                                           |
-| ------ | ---------------------------------------- | ------------------------------------------------- |
-| GET    | `/health`                                | Liveness, and what has been prepared              |
-| GET    | `/meta/options`                          | Every option list the registration form needs     |
-| POST   | `/mentors`                               | Register a mentor and first service, and price it |
-| GET    | `/mentors/demo`                          | The mentors seeded for the demonstration          |
-| GET    | `/mentors/{id}`                          | A mentor's own record                             |
-| GET    | `/mentors/{id}/dashboard`                | Advice, decisions and where the mentor sits       |
-| POST   | `/mentors/{id}/services`                 | Add another service, and price it                 |
-| POST   | `/services/{service_id}/recommendations` | Price one of the mentor's services again          |
-| GET    | `/services/{service_id}/comparables`     | What mentors like this one charge                 |
-| GET    | `/services/{service_id}/history`         | Every price this service has had, and its answer  |
-| GET    | `/recommendations/{id}`                  | Read back one advisory price                      |
-| POST   | `/recommendations/{id}/decision`         | Answer one advisory price                          |
+| Method | Path                                     | Token | Purpose                                            |
+| ------ | ---------------------------------------- | ----- | -------------------------------------------------- |
+| GET    | `/health`                                | no    | Liveness, and what has been prepared               |
+| GET    | `/meta/options`                          | no    | Every option list the registration form needs      |
+| POST   | `/auth/register`                         | no    | Register a mentor and first service, and price it   |
+| POST   | `/auth/login`                            | no    | Exchange an address and password for a token        |
+| GET    | `/auth/me`                               | yes   | Who the current token belongs to                   |
+| GET    | `/mentors`                               | no    | The public directory of mentors                    |
+| GET    | `/mentors/{id}/public`                   | no    | One mentor's public profile                        |
+| POST   | `/preview`                               | no    | Price a part-filled form, storing nothing          |
+| GET    | `/mentors/demo`                          | no    | The mentors seeded for the demonstration           |
+| PATCH  | `/mentors/me`                            | yes   | Edit the mentor's own name and profile fields      |
+| GET    | `/mentors/{id}`                          | yes   | A mentor's own record                              |
+| GET    | `/mentors/{id}/dashboard`                | yes   | Advice, decisions and where the mentor sits        |
+| GET    | `/mentors/{id}/activity`                 | yes   | The mentor's own activity, month by month          |
+| POST   | `/mentors/{id}/services`                 | yes   | Add another service, and price it                  |
+| GET    | `/services/{service_id}`                 | yes   | One of the mentor's own services                   |
+| POST   | `/services/{service_id}/recommendations` | yes   | Price one of the mentor's services again           |
+| GET    | `/services/{service_id}/comparables`     | yes   | What mentors like this one charge                  |
+| GET    | `/services/{service_id}/history`         | yes   | Every price this service has had, and its answer   |
+| GET    | `/recommendations/{id}`                  | yes   | Read back one advisory price, and its answer       |
+| POST   | `/recommendations/{id}/decision`         | yes   | Answer one advisory price                           |
 
-`/mentors/demo` is the one mentor-related endpoint that needs no identity
-header: it is the list someone picks an identity from, so requiring one would
-be circular. It carries nothing that is not already on a mentor's public
-profile, and it answers on a server with no models because it names no price.
+Every endpoint marked "yes" is scoped to the mentor the token belongs to. A
+request for somebody else's record returns 404 rather than 403, because 403
+would confirm that the other record exists.
+
+### What anybody may read
+
+Four endpoints answer without a token, and what they carry was chosen field by
+field rather than trimmed from a record.
+
+`GET /mentors` is the public directory: cards of `id`, display name, field
+label, the name of the mentor's main service, what they charge, the group
+size, the session label, whether they are verified, and how many reviews they
+have. Nothing else: no address, no password hash, no demonstration flag and
+none of the figures a model reads. It takes `field`, `group` (`one_to_one` or
+`group`), `limit` (24 by default, 100 at most) and `offset`, lists the newest
+mentor first, and reports the whole count beside the page. A mentor who
+registered a minute ago is on it on the same terms as a seeded one, with their
+verification shown as what it is, and their price null until they settle on
+one: a mentor who has only been advised a price has not set it.
+
+`GET /mentors/{id}/public` is the same card plus the skills they offer and the
+three optional profile fields, each null where the mentor left it blank.
+
+`POST /preview` prices a part-filled registration form: `field`, `max_mentees`
+and `skills`, the same validation as registration, and the same core model, so
+the number a mentor watches while they type is the number they are given when
+they submit. It writes nothing at all, and it is limited to 60 calls a minute
+per address, because it is the one endpoint with no account behind it and
+every call scores a model.
+
+`/mentors/demo` is the list someone picks a demonstration mentor from, so
+requiring a token would be circular. It carries nothing that is not already on
+a mentor's public profile, and it answers on a server with no models because
+it names no price.
 
 `GET /mentors/{id}` returns the mentor's services with what each one currently
 charges, and, for a mentor who has a track record, a summary of it in mentor
@@ -240,6 +364,24 @@ the same validation and the same mapping. Adding a service moves the service
 count the model is given, so the price it returns is not necessarily the price
 the same answers would have had as a first service: see
 `mapping.effective_services`.
+
+`GET /mentors/{id}/activity` is the mentor's own activity over time, as four
+parallel arrays of one entry per month plus one plain sentence about the
+period. A null in `booked_share_by_month` or `price_by_month` means the
+platform has no such measurement for that month, which is not the same as a
+zero: a zero would say the mentor was booked for none of the time they
+offered, or charged nothing. `reviews_by_month` is never null, because a month
+inside the period a mentor has been on the platform with no reviews in it had
+none. A mentor with nothing recorded yet, which is every mentor who has just
+registered, gets `has_history: false` and four empty lists rather than an
+error.
+
+`PATCH /mentors/me` edits the mentor's name and their three optional profile
+fields, and nothing else: the address they sign in with, their verification
+and everything about a service are each settled somewhere with a reason of
+their own. A field that was not sent is left alone and a field sent as null is
+cleared. None of these fields reaches a model, so a price never moves because
+of an edit here.
 
 ### Comparable mentors
 
@@ -359,15 +501,23 @@ from its size, and `/meta/options` publishes that rule as
 `one_to_one`, two or more is `group`, and the label is stored on the service
 and returned as `session_label`.
 
-How long a mentor has been mentoring is asked at registration and shown on
-their profile. It does not affect the price: see the note below.
+How long a mentor has been mentoring is asked at registration, as a number of
+years, and shown on their profile as the band it falls in. Both are optional
+and neither affects the price: see the note below.
 
-Identity is a placeholder. A mentor-scoped request carries the mentor's id in
-an `X-Mentor-Id` header, and there is no authentication yet. Every query is
-filtered by that id, so a mentor can only read their own records; a request
-for another mentor's row returns 404 rather than 403, which would confirm the
-row exists. Replacing `get_current_mentor_id` in `src/mentor/dependencies.py`
-with a real token check is the whole of the work to add authentication.
+The form no longer asks how many services a mentor plans to offer. It was a
+question about the future that a mentor had no way to answer accurately and
+that moved their price today, and what the model is given instead is how many
+services they have actually published: see `mapping.effective_services`.
+
+Identity is one function. A mentor-scoped request carries a signed access
+token, `get_current_mentor_id` in `src/mentor/dependencies.py` is the only
+thing in the codebase that turns it into a mentor id, and every mentor-scoped
+endpoint depends on it. Every query is filtered by that id, so a mentor can
+only read their own records; a request for another mentor's row returns 404
+rather than 403, which would confirm the row exists. That one function is what
+made replacing the prototype's trusted header with a real token check a change
+to one module and nothing else.
 
 ### Two models, one API
 
@@ -437,8 +587,9 @@ seat added and the per-mentee price falls with every seat added.
 
 A **new mentor's tenure** is the constant `NEW_MENTOR_TENURE_YEARS`, because
 a mentor who has just registered has no time on the platform whatever their
-career length. The experience band the form asks for is profile text: it is
-stored, returned on the mentor's record and never given to the model. In the
+career length. The years of experience the form asks for are profile text:
+they are stored, shown as a band on the mentor's profile, and never given to
+the model. In the
 training data a longer tenure goes with a lower price, which describes that
 dataset rather than anything true about mentoring, and routing the answer
 into that column would have advised the most experienced mentors to charge
@@ -462,7 +613,9 @@ src/
 │   ├── prediction.py  Loads both models, produces a price and its range
 │   ├── comparables.py Who a price is compared against, and how they are found
 │   ├── schemas.py   Request and response shapes
-│   ├── dependencies.py  The identity hook that will become authentication
+│   ├── security.py  Password hashing and the signed access tokens
+│   ├── rate_limit.py  How often one caller may ask for a preview price
+│   ├── dependencies.py  The one function that decides whose data a request sees
 │   └── app.py       The FastAPI application
 ├── api/             Earlier dashboard prototype
 ├── db/              SQLAlchemy models

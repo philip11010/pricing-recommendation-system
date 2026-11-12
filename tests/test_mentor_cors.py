@@ -21,7 +21,7 @@ from src.mentor.app import (
     DEFAULT_ALLOWED_ORIGINS,
     allowed_origins,
 )
-from src.mentor.dependencies import MENTOR_ID_HEADER
+from src.mentor.security import AUTH_HEADER
 
 LOCAL_ORIGIN = "http://localhost:3000"
 FOREIGN_ORIGIN = "https://somewhere-else.example.com"
@@ -53,29 +53,66 @@ def test_a_blank_setting_falls_back_rather_than_allowing_nothing() -> None:
     assert allowed_origins("  ,  ") == list(DEFAULT_ALLOWED_ORIGINS)
 
 
-def test_a_preflight_allows_the_identity_header(modelless_client) -> None:
+def test_a_preflight_allows_the_authorization_header(modelless_client) -> None:
     """
     The header the frontend sends on every mentor-scoped request.
 
     A preflight that does not list it is the failure mode this test exists
-    for: the browser sends the identity header on the real request, the
-    preflight never approved it, and the call is refused before the API sees
-    it.
+    for: the browser sends the access token on the real request, the preflight
+    never approved it, and the call is refused before the API sees it.
     """
     response = modelless_client.options(
         "/mentors/1",
         headers={
             "Origin": LOCAL_ORIGIN,
             "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": MENTOR_ID_HEADER,
+            "Access-Control-Request-Headers": AUTH_HEADER,
         },
     )
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == LOCAL_ORIGIN
     allowed = response.headers["access-control-allow-headers"].lower()
-    assert MENTOR_ID_HEADER.lower() in allowed
+    assert AUTH_HEADER.lower() in allowed
     assert "content-type" in allowed
+
+
+def test_a_preflight_no_longer_allows_the_old_identity_header(
+    modelless_client,
+) -> None:
+    """
+    The prototype's trusted header is gone, and so is the browser's
+    permission to send it. A frontend still setting it is told by the
+    preflight rather than having its requests quietly ignored.
+    """
+    response = modelless_client.options(
+        "/mentors/1",
+        headers={
+            "Origin": LOCAL_ORIGIN,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-Mentor-Id",
+        },
+    )
+
+    assert (
+        "x-mentor-id"
+        not in response.headers.get("access-control-allow-headers", "").lower()
+    )
+
+
+def test_a_preflight_allows_editing_the_mentors_own_profile(modelless_client) -> None:
+    """PATCH is the third method the frontend uses, so it has to be listed."""
+    response = modelless_client.options(
+        "/mentors/me",
+        headers={
+            "Origin": LOCAL_ORIGIN,
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": AUTH_HEADER,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "PATCH" in response.headers["access-control-allow-methods"]
 
 
 def test_a_permitted_origin_may_read_the_response(modelless_client) -> None:

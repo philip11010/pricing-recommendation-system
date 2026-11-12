@@ -57,7 +57,6 @@ VALID_ANSWERS = {
     "min_commitment": 1,
     "skills": ["cv_review", "interview_preparation"],
     "profile_verified": True,
-    "services_planned": 1,
     "services_count": 1,
 }
 
@@ -259,31 +258,36 @@ def test_a_bare_string_is_not_a_list_of_skills():
 # Service count
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    ("count", "planned", "expected"),
+    ("count", "expected"),
     [
-        (0, 1, 1),
-        (1, 1, 1),
-        (1, 3, 3),
-        (3, 1, 3),
-        (2, 2, 2),
-        (4, 4, 4),
-        # Above the cap on either side, and on both.
-        (9, 1, 4),
-        (1, 4, 4),
-        (12, 4, 4),
+        # Zero cannot happen on the pricing path, since a service is being
+        # priced, but one is the answer if it ever did.
+        (0, 1),
+        (1, 1),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        # Above the cap, where the model's equivalent column stops moving.
+        (5, 4),
+        (12, 4),
     ],
 )
-def test_the_service_count_is_the_larger_of_the_two_capped_at_four(
-    count, planned, expected
+def test_the_service_count_is_what_the_mentor_has_published_capped_at_four(
+    count, expected
 ):
-    inputs = mapping.to_model_inputs(
-        **answers(services_count=count, services_planned=planned)
-    )
+    """
+    What the platform can see, rather than what a mentor predicted.
+
+    The form used to ask how many services they planned to offer and the
+    larger of the two answers was used. That question is gone: it moved a
+    mentor's price today on a guess about the future.
+    """
+    inputs = mapping.to_model_inputs(**answers(services_count=count))
     assert inputs[mapping.COLUMN_SERVICES] == expected
 
 
 def test_the_service_count_never_exceeds_the_cap():
-    assert mapping.effective_services(500, 4) == mapping.SERVICES_CAP
+    assert mapping.effective_services(500) == mapping.SERVICES_CAP
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +310,6 @@ def test_the_service_count_never_exceeds_the_cap():
         ({"min_commitment": 100}, "min_commitment"),
         ({"profile_verified": "yes"}, "profile_verified"),
         ({"profile_verified": 1}, "profile_verified"),
-        ({"services_planned": 0}, "services_planned"),
-        ({"services_planned": 5}, "services_planned"),
         ({"services_count": -1}, "services_count"),
     ],
 )
@@ -705,8 +707,9 @@ def test_the_form_options_cover_every_choice_on_the_form():
         "max_mentees",
         "session_label_rule",
         "min_commitment",
+        "min_commitment_default",
         "years_mentoring_bands",
-        "services_planned",
+        "years_experience",
         "education_levels",
     }
     assert options["currency"] == "AUD"
@@ -756,7 +759,6 @@ def test_the_published_rule_is_the_rule_the_mapping_applies(mentees):
         "skills",
         "min_commitment",
         "years_mentoring_bands",
-        "services_planned",
         "education_levels",
     ],
 )
@@ -808,7 +810,103 @@ def test_the_options_a_mentor_reads_use_mentor_language():
         assert leaked not in labels
 
 
-def test_four_or_more_services_is_labelled_as_a_minimum():
-    options = mapping.get_form_options()["services_planned"]
-    top = next(option for option in options if option["id"] == mapping.SERVICES_CAP)
-    assert "or more" in top["label"]
+def test_the_form_no_longer_asks_how_many_services_are_planned():
+    """
+    The question is gone. It asked a mentor to predict their own future and
+    then priced them on the prediction, and what the model is given now is
+    the number of services they have actually published.
+    """
+    assert "services_planned" not in mapping.get_form_options()
+
+
+def test_the_form_publishes_the_range_of_years_it_will_accept():
+    years = mapping.get_form_options()["years_experience"]
+
+    assert years == {
+        "min": mapping.YEARS_EXPERIENCE_MIN,
+        "max": mapping.YEARS_EXPERIENCE_MAX,
+    }
+
+
+def test_the_form_publishes_the_commitment_it_assumes_when_nobody_answers():
+    options = mapping.get_form_options()
+
+    assert options["min_commitment_default"] == mapping.MIN_COMMITMENT_DEFAULT
+    assert mapping.MIN_COMMITMENT_DEFAULT in mapping.MIN_COMMITMENT_OPTIONS
+
+
+# ---------------------------------------------------------------------------
+# Years of experience
+#
+# Profile only, like the band it is shown as. Both are stored and neither is
+# a model input, which is the whole point of the pair.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("years", [0, 1, 7, 30, 60])
+def test_a_number_of_years_within_the_range_is_accepted(years):
+    assert mapping.validate_years_experience(years) == years
+
+
+@pytest.mark.parametrize("years", [-1, 61, 2.5, "seven", True, None])
+def test_a_number_of_years_outside_the_range_is_refused(years):
+    with pytest.raises(MentorInputError) as error:
+        mapping.validate_years_experience(years)
+
+    assert error.value.field == "years_experience"
+    assert error.value.message
+
+
+@pytest.mark.parametrize(
+    ("years", "band"),
+    [
+        (0, "under_1"),
+        (1, "1_to_2"),
+        (2, "1_to_2"),
+        (3, "3_to_5"),
+        (5, "3_to_5"),
+        (6, "6_to_10"),
+        (10, "6_to_10"),
+        (11, "over_10"),
+        (40, "over_10"),
+    ],
+)
+def test_the_band_a_number_of_years_falls_in(years, band):
+    assert mapping.years_mentoring_band_for_experience(years) == band
+    assert band in mapping.YEARS_MENTORING_BANDS
+
+
+def test_the_years_of_experience_reach_no_model_column():
+    """
+    The guard on change 2. In the training data a longer tenure goes with a
+    lower price, which describes that dataset rather than mentoring, so
+    routing a mentor's experience into that column would advise the most
+    experienced of them to charge the least.
+    """
+    inputs = mapping.to_model_inputs(**answers())
+
+    assert inputs[mapping.COLUMN_TENURE] == mapping.NEW_MENTOR_TENURE_YEARS
+    assert "years_experience" not in inputs
+
+
+# ---------------------------------------------------------------------------
+# What a service is called
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("mentees", [1, 2, 8])
+def test_a_service_name_is_derived_from_the_field_and_the_group_size(mentees):
+    """
+    Derived rather than asked, for the same reason the session label is: a
+    name typed separately would be a third description of one service that
+    could disagree with the other two.
+    """
+    name = mapping.service_name("technology_software", mentees)
+
+    assert mapping.field_label("technology_software") in name
+    assert ("one-to-one" in name) == (mentees == 1)
+    assert ("group" in name) == (mentees > 1)
+
+
+def test_a_service_name_carries_no_source_dataset_word():
+    for field in mapping.FIELDS:
+        for mentees in (1, 4):
+            name = mapping.service_name(field, mentees).lower()
+            for leaked in ("listing", "host", "night", "room", "guest"):
+                assert leaked not in name

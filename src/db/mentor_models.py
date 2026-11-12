@@ -1,14 +1,16 @@
 """
 Persistence schema for the mentor-facing pricing API.
 
-Five tables, following the shape of the flow rather than the shape of the
+Six tables, following the shape of the flow rather than the shape of the
 model:
 
 ``mentors``
-    Who registered. Profile text is stored because the mentor's profile page
-    needs it, not because the model reads it: education, experience and
-    credentials have no equivalent in the training data, so they are profile
-    fields only.
+    Who registered, and the hash of the password they sign in with. Profile
+    text is stored because the mentor's profile page needs it, not because the
+    model reads it: education, years of experience and credentials have no
+    equivalent in the training data, so they are profile fields only. The
+    ``verified`` flag is the platform's own statement about a mentor rather
+    than one of theirs, which is why nothing a mentor sends can set it.
 ``services``
     What a mentor offers. A mentor can have several; each is priced on its
     own, because the size and the audience differ between them. The label a
@@ -19,6 +21,10 @@ model:
     mentor, written by the platform rather than by the mentor. A mentor with a
     complete row is priced by the full model; a mentor with none, or with a
     partial one, is priced by the core model.
+``mentor_activity``
+    The same mentor's activity month by month, for the chart on their own
+    page. Read by people rather than by a model: nothing in it reaches a
+    price.
 ``recommendations``
     What the model advised, with the exact inputs it was given. The snapshot
     is stored so a price can be explained months later, after the mentor has
@@ -37,19 +43,22 @@ SQLite, and every constraint is plain SQL that both accept.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -63,7 +72,8 @@ from src.mentor.mapping import (
     LABEL_ONE_TO_ONE,
     MAX_MENTEES_MAX,
     MAX_MENTEES_MIN,
-    SERVICES_CAP,
+    YEARS_EXPERIENCE_MAX,
+    YEARS_EXPERIENCE_MIN,
 )
 
 # Which model produced a recommendation. Stored so that a price can be read
@@ -96,20 +106,35 @@ class Mentor(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Stored lowercased and trimmed, by src.mentor.security.normalise_email.
+    # Unique twice over: on the column, and on its lowercased form in a
+    # functional index, so two mentors cannot register the same address in
+    # different capitals however a row is written.
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
-    # Nullable and unused. There is no authentication yet, but a mentor row
-    # created now has to be able to gain a password later without a migration
-    # that rewrites existing rows.
+    # The Argon2 hash of the mentor's password. Still nullable, because a
+    # mentor row seeded or written before a password existed has none, and a
+    # row without one can never be signed in to: see
+    # src.mentor.security.verify_password.
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Whether the platform has checked who this mentor is. False for everyone
+    # who registers, and set by scripts/verify_mentor.py once a person has
+    # looked. It is shown on the public directory as a checkmark, and the
+    # matching flag on each of the mentor's services is what the model reads.
+    verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", index=True
+    )
     headline: Mapped[str | None] = mapped_column(String(300), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     education_level: Mapped[str | None] = mapped_column(String(60), nullable=True)
     experience_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
-    years_mentoring_band: Mapped[str] = mapped_column(String(20), nullable=False)
-    # Asked once, at registration. Feeds the model together with the number of
-    # services actually published: see mapping.effective_services.
-    services_planned: Mapped[int] = mapped_column(Integer, nullable=False)
+    # How many years the mentor has been mentoring, and the band it falls in.
+    # Both profile only, never model inputs. The number is what the mentor is
+    # asked and the band is how it is shown, and the band is derived from the
+    # number rather than asked separately. Both nullable: answering is
+    # optional and nothing about the price depends on it.
+    years_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    years_mentoring_band: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # A mentor created by scripts/seed_demo_mentors.py to have something to
     # demonstrate. Flagged rather than inferred from the email domain, so the
     # seed script can find its own rows again and remove exactly those.
@@ -135,12 +160,25 @@ class Mentor(Base):
     history: Mapped[MentorHistory | None] = relationship(
         back_populates="mentor", cascade="all, delete-orphan", uselist=False
     )
-
+    activity: Mapped[list[MentorActivity]] = relationship(
+        back_populates="mentor",
+        cascade="all, delete-orphan",
+        order_by="MentorActivity.month",
+    )
     __table_args__ = (
         CheckConstraint(
-            f"services_planned BETWEEN 1 AND {SERVICES_CAP}",
-            name="ck_mentor_services_planned",
+            f"years_experience IS NULL OR years_experience BETWEEN "
+            f"{YEARS_EXPERIENCE_MIN} AND {YEARS_EXPERIENCE_MAX}",
+            name="ck_mentor_years_experience",
         ),
+        # One account per address, whatever capitals it was typed in. The
+        # application lowercases an address before it stores or compares one,
+        # so this index is the guard against the row that bypasses it: a seed
+        # script, a migration, or a second application writing the same table.
+        # An expression index rather than a constraint, because both SQLite
+        # and PostgreSQL support one and neither supports a check on a
+        # function of a column it can enforce across rows.
+        Index("ix_mentors_email_lower", text("lower(email)"), unique=True),
     )
 
     def __repr__(self) -> str:
@@ -318,6 +356,71 @@ class MentorHistory(Base):
         return (
             f"MentorHistory(mentor_id={self.mentor_id!r}, "
             f"complete={self.is_complete!r})"
+        )
+
+
+class MentorActivity(Base):
+    """
+    One month of a mentor's activity, for the chart on their own page.
+
+    One row per mentor per month, keyed on the pair, so a rebuild writes over
+    the month it recomputed rather than adding a second copy of it. The month
+    is stored as its first day: a date column answers "which month is this"
+    without a convention about how a month is spelled, and sorts correctly.
+
+    Separate from ``mentor_history``, which holds the twenty-eight figures a
+    model reads as they stand today. This table is the same mentor's activity
+    over time, it is read by people rather than by a model, and nothing here
+    reaches a price.
+
+    Every measure except the review count is nullable, and that is a statement
+    about the sources rather than a convenience: a month the platform has
+    reviews for but no booking record has a row with a review count and
+    nothing else. A zero would say the mentor was booked for none of their
+    offered time, which is a different claim from not knowing.
+
+    Ratings over time are deliberately absent. The sources hold one rating per
+    mentor as it stands now, with no record of what it was in any earlier
+    month, so a rating line would have to be invented.
+    """
+
+    __tablename__ = "mentor_activity"
+
+    mentor_id: Mapped[int] = mapped_column(
+        ForeignKey("mentors.id", ondelete="CASCADE"), primary_key=True
+    )
+    month: Mapped[date] = mapped_column(Date, primary_key=True)
+
+    reviews_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    booked_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # What the mentor charged that month, in whole currency units. Nullable
+    # for the same reason as the booked share: a month with no price on record
+    # has none, and inventing one would put a figure on a chart that nobody
+    # measured.
+    price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    mentor: Mapped[Mentor] = relationship(back_populates="activity")
+
+    __table_args__ = (
+        CheckConstraint("reviews_count >= 0", name="ck_activity_reviews_count"),
+        # NULL is tested explicitly in both: a bare comparison against NULL
+        # evaluates to NULL rather than FALSE, and a CHECK only rejects a row
+        # on FALSE, so the comparison alone would be no constraint at all on a
+        # row that has no figure while also failing to say that none is
+        # allowed.
+        CheckConstraint(
+            "booked_share IS NULL OR (booked_share >= 0 AND booked_share <= 1)",
+            name="ck_activity_booked_share",
+        ),
+        CheckConstraint(
+            "price IS NULL OR price > 0", name="ck_activity_price_positive"
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"MentorActivity(mentor_id={self.mentor_id!r}, month={self.month!r}, "
+            f"reviews_count={self.reviews_count!r})"
         )
 
 

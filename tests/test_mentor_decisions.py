@@ -28,40 +28,10 @@ import pytest
 
 from src.db.mentor_models import PricingDecision, Service
 from src.mentor import mapping
-from src.mentor.dependencies import MENTOR_ID_HEADER
+
+from .conftest import REGISTRATION, headers, register
 
 pytestmark = pytest.mark.app_assets
-
-REGISTRATION = {
-    "full_name": "A. Mentor",
-    "email": "mentor@example.com",
-    "years_mentoring_band": "3_to_5",
-    "services_planned": 1,
-    "headline": "Helping graduate engineers find their first role",
-    "service": {
-        "field": "technology_software",
-        "max_mentees": 1,
-        "min_commitment": 1,
-        "skills": ["cv_review", "interview_preparation"],
-        "profile_verified": True,
-    },
-}
-
-
-def registration(**overrides):
-    payload = {**REGISTRATION, **overrides}
-    payload["service"] = {**REGISTRATION["service"], **overrides.get("service", {})}
-    return payload
-
-
-def register(client, **overrides):
-    response = client.post("/mentors", json=registration(**overrides))
-    assert response.status_code == 201, response.text
-    return response.json()
-
-
-def headers(mentor_id: int) -> dict[str, str]:
-    return {MENTOR_ID_HEADER: str(mentor_id)}
 
 
 def decide(client, mentor_id, recommendation_id, **payload):
@@ -735,7 +705,6 @@ def test_the_dashboard_totals_cover_every_service(client, answered):
             "max_mentees": 4,
             "min_commitment": 2,
             "skills": ["career_planning"],
-            "profile_verified": True,
         },
         headers=headers(mentor_id),
     )
@@ -743,7 +712,7 @@ def test_the_dashboard_totals_cover_every_service(client, answered):
     payload = dashboard(client, mentor_id)
 
     assert payload["mentor_id"] == mentor_id
-    assert payload["display_name"] == REGISTRATION["full_name"]
+    assert payload["display_name"] == REGISTRATION["name"]
     assert payload["totals"]["services"] == 2
     assert payload["totals"]["services_with_a_price"] == 1
     assert payload["totals"]["recommendations"] == 5
@@ -798,3 +767,184 @@ def test_reading_a_dashboard_needs_an_identity(client, registered):
     mentor_id, _, _ = registered
 
     assert client.get(f"/mentors/{mentor_id}/dashboard").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# The sentence the dashboard opens with
+#
+# The block a mentor actually reads. Every figure behind it is reported beside
+# it, so these tests check both: that the numbers are the ones the comparison
+# produced, and that the sentence says what they mean in words a mentor would
+# use.
+# ---------------------------------------------------------------------------
+def settle_at(client, mentor_id, service_id, price):
+    """Put the service's current price at ``price``, the way a mentor would."""
+    fresh = price_again(client, mentor_id, service_id)
+    response = decide(
+        client, mentor_id, fresh["id"], action="modified", final_price=price
+    )
+    assert response.status_code == 201, response.text
+
+
+def headline(client, mentor_id):
+    return dashboard(client, mentor_id)["headline"]
+
+
+def test_the_headline_reports_the_mentors_price_and_a_typical_one(client, registered):
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, 350)
+
+    block = headline(client, mentor_id)
+
+    assert block["your_price"] == 350
+    assert block["similar_typical"] > 0
+    assert block["currency"] == "AUD"
+    assert block["sentence"]
+
+
+@pytest.mark.parametrize(
+    ("price", "position", "expected"),
+    [
+        (100, "below", "less than most"),
+        (350, "within", "about the same as"),
+        (900, "above", "more than most"),
+    ],
+)
+def test_the_headline_says_which_side_of_typical_the_mentor_is_on(
+    client, registered, price, position, expected
+):
+    """
+    One case either side of what comparable mentors charge and one inside it.
+    The sentence is the whole point of the block, so it is asserted on rather
+    than the position alone.
+    """
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, price)
+
+    block = headline(client, mentor_id)
+
+    assert block["position_vs_range"] == position
+    assert expected in block["sentence"]
+    # This mentor's comparison widens to their whole field, because the
+    # table has fewer than the minimum at their group size, and the sentence
+    # has to describe the comparison it actually used.
+    assert "other mentors in your field" in block["sentence"]
+
+
+def test_the_headline_names_the_group_size_when_the_comparison_did(client):
+    """
+    A comparison matched on field and group size is described as such, and
+    one that had to widen to the whole field is not: the sentence can only
+    claim what the comparison behind it did.
+    """
+    body = register(client, max_mentees=2)
+    mentor_id = body["mentor"]["id"]
+    settle_at(client, mentor_id, body["service"]["id"], 350)
+
+    sentence = headline(client, mentor_id)["sentence"]
+
+    assert "group mentors in your field" in sentence
+
+
+def test_the_headline_sentence_carries_no_jargon_or_percentages(client, registered):
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, 350)
+
+    sentence = headline(client, mentor_id)["sentence"]
+
+    assert "%" not in sentence
+    for jargon in (
+        "percentile",
+        "quartile",
+        "median",
+        "model",
+        "confidence",
+        "residual",
+        "occ_",
+        "listing",
+        "host",
+    ):
+        assert jargon not in sentence.lower()
+
+
+def test_the_headline_asks_a_mentor_with_no_price_to_set_one(client, registered):
+    """
+    A new mentor has been advised a price and has not settled on one, which is
+    the state every mentor starts in.
+    """
+    mentor_id, _, _ = registered
+
+    block = headline(client, mentor_id)
+
+    assert block["your_price"] is None
+    assert block["position_vs_range"] is None
+    assert "not set a price" in block["sentence"]
+    # It still says what other mentors charge, because that is the figure
+    # they need in order to set one.
+    assert block["similar_typical"] > 0
+    assert str(block["similar_typical"]) in block["sentence"].replace(",", "")
+
+
+def test_the_headline_says_so_when_there_is_nothing_to_compare_with(
+    comparableless_client,
+):
+    """
+    A server with no comparison table reports no typical price and says as
+    much, rather than claiming the mentor is typical or leaving the sentence
+    empty.
+    """
+    body = register(comparableless_client)
+    mentor_id = body["mentor"]["id"]
+
+    block = comparableless_client.get(
+        f"/mentors/{mentor_id}/dashboard", headers=headers(mentor_id)
+    ).json()["headline"]
+
+    assert block["similar_typical"] is None
+    assert block["position_vs_range"] is None
+    assert block["sentence"]
+
+
+def test_the_headline_is_about_the_mentors_first_service(client, registered):
+    """
+    The main service: the one they described at registration, rather than
+    whichever they added last.
+    """
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, 350)
+    client.post(
+        f"/mentors/{mentor_id}/services",
+        json={"field": "law", "max_mentees": 8, "min_commitment": 1, "skills": []},
+        headers=headers(mentor_id),
+    )
+
+    block = headline(client, mentor_id)
+
+    assert block["your_price"] == 350
+
+
+def test_the_dashboard_works_for_a_mentor_with_a_track_record(client, api_sessions):
+    """
+    Both halves of the system reach the same page. A mentor with a complete
+    record is priced by the full model, and every block of their dashboard
+    has to be built from that price the same way as from a core one.
+    """
+    from src.db.mentor_models import MentorHistory
+
+    from .conftest import SYNTHETIC_HISTORY
+
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    with api_sessions() as session:
+        session.add(MentorHistory(mentor_id=mentor_id, **SYNTHETIC_HISTORY))
+        session.commit()
+    priced = price_again(client, mentor_id, body["service"]["id"])
+    decide(client, mentor_id, priced["id"], action="accepted")
+
+    payload = dashboard(client, mentor_id)
+
+    assert payload["services"][0]["latest_recommendation"]["model_used"] == "full"
+    assert payload["services"][0]["latest_recommendation"]["low_confidence"] is False
+    assert payload["headline"]["your_price"] == priced["recommended_price"]
+    assert payload["headline"]["sentence"]
+    assert payload["totals"]["decision_counts"]["accepted"] == 1

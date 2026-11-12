@@ -42,13 +42,16 @@ MENTOR_TABLES = {
 }
 
 
-def make_mentor(email: str = "mentor@example.com") -> Mentor:
-    return Mentor(
-        full_name="A. Mentor",
-        email=email,
-        years_mentoring_band="3_to_5",
-        services_planned=1,
-    )
+def make_mentor(email: str = "mentor@example.com", **overrides) -> Mentor:
+    values = {
+        "full_name": "A. Mentor",
+        "email": email,
+        "password_hash": "not-a-real-hash",
+        "years_experience": 4,
+        "years_mentoring_band": "3_to_5",
+    }
+    values.update(overrides)
+    return Mentor(**values)
 
 
 def make_service(mentor_id: int, **overrides) -> Service:
@@ -79,7 +82,6 @@ def make_recommendation(service_id: int, **overrides) -> PricingRecommendation:
             min_commitment=1,
             skills=["cv_review"],
             profile_verified=True,
-            services_planned=1,
             services_count=1,
         ),
         "model_version": "test-version",
@@ -115,30 +117,66 @@ def test_a_mentor_round_trips(db_session):
     assert mentor.created_at.tzinfo is not None
 
 
-def test_the_password_hash_starts_empty(db_session):
+def test_a_mentor_may_have_no_password(db_session):
     """
-    There is no authentication yet. The column exists so that adding one does
-    not mean rewriting every existing row.
+    The column stays nullable. A row seeded or written before passwords
+    existed has none, and src.mentor.security refuses a sign-in against a
+    missing hash rather than treating it as a blank password.
+    """
+    db_session.add(make_mentor(password_hash=None))
+    db_session.commit()
+
+    assert db_session.scalar(select(Mentor)).password_hash is None
+
+
+def test_a_mentor_starts_unverified(db_session):
+    """
+    Verification is what the platform says about a mentor after a person has
+    checked them, so the default is false and the only thing that changes it
+    is scripts/verify_mentor.py.
     """
     db_session.add(make_mentor())
     db_session.commit()
 
-    assert db_session.scalar(select(Mentor)).password_hash is None
+    assert db_session.scalar(select(Mentor)).verified is False
+
+
+def test_two_mentors_cannot_share_an_email_in_different_capitals(db_session):
+    """
+    The application lowercases an address before it stores one, and the
+    unique index on the lowercased column is the guard against whatever
+    writes a row without going through it.
+    """
+    db_session.add(make_mentor(email="mentor@example.com"))
+    db_session.commit()
+    db_session.add(make_mentor(email="Mentor@Example.com"))
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+@pytest.mark.parametrize("years", [-1, 61])
+def test_a_number_of_years_outside_the_range_is_refused(db_session, years):
+    db_session.add(make_mentor(years_experience=years))
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+def test_a_mentor_need_not_say_how_long_they_have_been_mentoring(db_session):
+    """Both columns are optional, and the band is derived from the number."""
+    db_session.add(make_mentor(years_experience=None, years_mentoring_band=None))
+    db_session.commit()
+
+    mentor = db_session.scalar(select(Mentor))
+    assert mentor.years_experience is None
+    assert mentor.years_mentoring_band is None
 
 
 def test_two_mentors_cannot_share_an_email(db_session):
     db_session.add(make_mentor())
     db_session.commit()
     db_session.add(make_mentor())
-
-    with pytest.raises(IntegrityError):
-        db_session.commit()
-
-
-def test_a_mentor_cannot_plan_more_services_than_the_form_offers(db_session):
-    mentor = make_mentor()
-    mentor.services_planned = 9
-    db_session.add(mentor)
 
     with pytest.raises(IntegrityError):
         db_session.commit()

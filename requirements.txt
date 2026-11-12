@@ -17,6 +17,13 @@ pydantic==2.10.3
 jinja2==3.1.6
 python-multipart==0.0.20
 
+# Authentication. Argon2id is the password hash, with the library's own
+# parameters, and PyJWT signs the stateless access tokens. Both are pinned,
+# like everything else here: a hashing library that changed its defaults
+# under an existing database would be a change to stored hashes.
+argon2-cffi==25.1.0
+PyJWT==2.10.1
+
 # Database
 psycopg2-binary==2.9.10
 SQLAlchemy==2.0.36

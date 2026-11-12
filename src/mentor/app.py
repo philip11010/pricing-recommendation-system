@@ -49,16 +49,20 @@ from sqlalchemy.orm import Session
 from src.db import get_session
 from src.db.mentor_models import (
     Mentor,
+    MentorActivity,
     MentorHistory,
     PricingDecision,
     PricingRecommendation,
     Service,
 )
 from src.mentor import comparables as comparables_module
-from src.mentor import mapping
-from src.mentor.dependencies import MENTOR_ID_HEADER, get_current_mentor_id
+from src.mentor import mapping, security
+from src.mentor.dependencies import get_current_mentor_id, unauthorized
 from src.mentor.prediction import (
     ASSETS_MISSING_MESSAGE,
+    POSITION_ABOVE,
+    POSITION_BELOW,
+    POSITION_WITHIN,
     AssetsUnavailableError,
     PricingService,
     difference_vs_current_percent,
@@ -66,10 +70,13 @@ from src.mentor.prediction import (
     per_mentee,
     position_vs_range,
 )
+from src.mentor.rate_limit import RateLimiter
 from src.mentor.schemas import (
+    ActivityOut,
     ComparableItemOut,
     ComparablesOut,
     ComparablesSummaryOut,
+    DashboardHeadlineOut,
     DashboardOut,
     DashboardServiceOut,
     DashboardTotalsOut,
@@ -80,10 +87,18 @@ from src.mentor.schemas import (
     ErrorOut,
     HealthOut,
     HistorySummaryOut,
+    LoginOut,
+    MentorCardOut,
+    MentorDirectoryOut,
+    MentorLogin,
     MentorOut,
     MentorRegistration,
+    MentorUpdate,
     OptionsOut,
+    PreviewInput,
+    PreviewOut,
     PriceHistogramOut,
+    PublicMentorOut,
     RecommendationHistoryOut,
     RecommendationOut,
     RegistrationOut,
@@ -91,6 +106,7 @@ from src.mentor.schemas import (
     ServiceHistoryOut,
     ServiceInput,
     ServiceOut,
+    SkillOut,
     TimelinePointOut,
 )
 
@@ -102,10 +118,17 @@ logger = logging.getLogger(__name__)
 # caller enumerate other mentors' rows.
 NOT_FOUND_MESSAGE = "That record does not exist."
 
+# Deliberately neutral. "That address is already registered" would confirm
+# an account exists to anyone who typed the address, so the message names no
+# address and says the same thing whoever reads it.
 EMAIL_TAKEN_MESSAGE = (
-    "An account already exists for that email address. Sign in instead, or "
+    "That email address cannot be used to register. Sign in instead, or "
     "register with a different address."
 )
+
+# One message for a wrong password and for an address nobody has registered.
+# Two messages would answer "is this person on the platform".
+SIGN_IN_FAILED_MESSAGE = "That email address and password do not match an account."
 
 ALREADY_DECIDED_MESSAGE = (
     "You have already answered this price. Ask for a fresh price if you want "
@@ -117,6 +140,27 @@ ALREADY_DECIDED_MESSAGE = (
 # histogram beside the list already describes the whole distribution.
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
+
+# The paging limits on the public directory. Twenty-four is a screenful of
+# cards in three, four or six columns, and a hundred is as many as one request
+# is worth: a list that long is being scraped rather than read.
+DIRECTORY_DEFAULT_LIMIT = 24
+DIRECTORY_MAX_LIMIT = 100
+
+# How often one address may ask for a preview price. Sixty a minute is about
+# one a second, which is faster than anybody fills in a form and slower than a
+# page in a loop.
+PREVIEW_RATE_LIMIT = 60
+PREVIEW_RATE_WINDOW_SECONDS = 60.0
+
+preview_limiter = RateLimiter(
+    limit=PREVIEW_RATE_LIMIT, window=PREVIEW_RATE_WINDOW_SECONDS
+)
+
+PREVIEW_RATE_LIMIT_MESSAGE = (
+    "That is more price previews than this server will work out at once. Wait "
+    "a moment and try again."
+)
 
 DESCRIPTION = """
 Advisory session pricing for mentors.
@@ -160,14 +204,23 @@ Nothing in this API reports earnings or income. There are no bookings in the
 system, so there is no volume to turn a price into a total, and a figure
 presented as income would be invented.
 
-Identity is a placeholder: send the mentor's id in the `X-Mentor-Id` header.
-There is no authentication yet. A mentor can only ever read their own records,
-and a request for someone else's returns 404.
+A mentor registers with an email address and a password and is given an access
+token. Every request about their own records carries it as
+`Authorization: Bearer <token>`. A mentor can only ever read their own
+records, and a request for someone else's returns 404 rather than 403, because
+403 would confirm that the other record exists.
+
+Signing out is the client discarding the token. The server keeps no session,
+so there is nothing for it to end.
 """
 
 TAGS: list[dict[str, Any]] = [
     {"name": "service", "description": "Liveness and form options."},
-    {"name": "mentors", "description": "Registration and a mentor's own record."},
+    {
+        "name": "auth",
+        "description": "Registering, signing in, and who the caller is.",
+    },
+    {"name": "mentors", "description": "A mentor's own record."},
     {"name": "pricing", "description": "Advisory prices for a mentor's services."},
     {
         "name": "comparables",
@@ -176,6 +229,10 @@ TAGS: list[dict[str, Any]] = [
     {
         "name": "decisions",
         "description": "What the mentor did about a price, and the record of it.",
+    },
+    {
+        "name": "directory",
+        "description": "The public list of mentors, and one mentor's profile.",
     },
     {
         "name": "demo",
@@ -189,15 +246,23 @@ ERROR_RESPONSE = {"model": ErrorOut}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Load the models and the comparison table, or record why they are missing.
+    Settle the signing key, then load the models and the comparison table.
 
-    A missing build output is an operational fault rather than a normal state,
-    but refusing to boot would also take down the endpoints that could explain
-    it. So each failure is held and reported by /health and by the endpoints
-    that need that particular thing. The two are independent: a server can
-    price perfectly well with no comparison table, and the only thing it
-    cannot do is say what other mentors charge.
+    The signing key comes first and is the one thing here that can stop the
+    server from starting. A production deployment without one would issue
+    access tokens that anyone could forge while looking perfectly healthy, so
+    it refuses to boot instead. Outside production a key is generated and one
+    warning line says so.
+
+    A missing build output is different: it is an operational fault rather
+    than an unsafe state, and refusing to boot would also take down the
+    endpoints that could explain it. So each failure is held and reported by
+    /health and by the endpoints that need that particular thing. The two are
+    independent: a server can price perfectly well with no comparison table,
+    and the only thing it cannot do is say what other mentors charge.
     """
+    security.get_secret_key()
+
     try:
         app.state.pricing = load_pricing_service()
         app.state.pricing_error = None
@@ -244,10 +309,11 @@ DEFAULT_ALLOWED_ORIGINS: tuple[str, ...] = (
 )
 
 # Only the two the frontend sends. "*" would also work and is what most
-# examples use, but naming them documents what the client is expected to send
-# and keeps the identity header visible as the thing that will become
-# authentication.
-ALLOWED_REQUEST_HEADERS: tuple[str, ...] = ("Content-Type", MENTOR_ID_HEADER)
+# examples use, but naming them documents what the client is expected to
+# send, and the authorization header is the one the frontend cannot do
+# without: a preflight that leaves it out means every signed-in request is
+# refused by the browser before this API sees it.
+ALLOWED_REQUEST_HEADERS: tuple[str, ...] = ("Content-Type", security.AUTH_HEADER)
 
 
 def allowed_origins(raw: str | None = None) -> list[str]:
@@ -275,11 +341,11 @@ def allowed_origins(raw: str | None = None) -> list[str]:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins(),
-    # No cookies and no HTTP authentication: identity travels in a header the
-    # frontend sets itself, so there are no credentials for a browser to
-    # attach and nothing is gained by asking it to.
+    # No cookies. The access token travels in a header the frontend sets
+    # itself, so there are no credentials for a browser to attach on its own,
+    # and a request the mentor did not make cannot carry their identity.
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=list(ALLOWED_REQUEST_HEADERS),
     max_age=600,
 )
@@ -574,8 +640,9 @@ def as_mentor(mentor: Mentor) -> MentorOut:
         education_level=mentor.education_level,
         experience_summary=mentor.experience_summary,
         credentials=mentor.credentials,
+        years_experience=mentor.years_experience,
         years_mentoring_band=mentor.years_mentoring_band,
-        services_planned=mentor.services_planned,
+        verified=bool(mentor.verified),
         is_demo=bool(mentor.is_demo),
         services=[ServiceOut.model_validate(service) for service in mentor.services],
         history=(
@@ -605,16 +672,15 @@ def recommend_for_service(
         or 0
     )
 
-    # The mentor's experience band is not passed in: it is profile text, and
-    # the mapping layer has no parameter for it. See the note at the top of
-    # that module.
+    # The mentor's years of experience are not passed in: they are profile
+    # text, and the mapping layer has no parameter for them. See the note at
+    # the top of that module.
     service_inputs = mapping.to_model_inputs(
         field=service.field,
         max_mentees=service.max_mentees,
         min_commitment=service.min_commitment,
         skills=list(service.skills or []),
         profile_verified=bool(service.profile_verified),
-        services_planned=mentor.services_planned,
         services_count=services_count,
     )
     history = complete_history(session, mentor.id)
@@ -638,7 +704,10 @@ def recommend_for_service(
 
 
 def as_recommendation(
-    record: PricingRecommendation, current_price: int | None = None
+    record: PricingRecommendation,
+    current_price: int | None = None,
+    *,
+    with_decision: bool = False,
 ) -> RecommendationOut:
     """
     One stored recommendation, in the response shape.
@@ -647,12 +716,19 @@ def as_recommendation(
     rather than stored themselves. The group size they are divided by comes
     from the row's own input snapshot, not from the service as it stands now:
     a mentor who changes the number of seats afterwards must not change what
-    an old price says each mentee was paying.
+    an old price says each mentee was paying. The size of session the price
+    was for, and what that size is called, are read from the same snapshot for
+    the same reason.
 
     ``current_price`` is read from the service as it stands now, and that is
     the right way round: the comparison answers "what should I charge instead
     of what I charge today", so it has to be against today's price rather than
     against whatever was set when the advice was given.
+
+    ``with_decision`` includes the mentor's answer on the price itself. Off by
+    default, because the responses that list prices report the decision beside
+    each one, and reporting it in both places would put the same row in a
+    response twice.
     """
     mentees = mapping.max_mentees_from_inputs(record.inputs_snapshot)
     comparison: dict[str, Any] = {}
@@ -676,11 +752,18 @@ def as_recommendation(
         price_per_mentee_low=per_mentee(record.price_low, mentees),
         price_per_mentee_high=per_mentee(record.price_high, mentees),
         currency=mapping.CURRENCY,
+        max_mentees=mentees,
+        session_label=mapping.session_label(mentees),
         model_used=record.model_used,
         low_confidence=record.low_confidence,
         model_version=record.model_version,
         status=record.status,
         generated_at=record.generated_at,
+        decision=(
+            as_decision(record.decision)
+            if with_decision and record.decision is not None
+            else None
+        ),
         **comparison,
     )
 
@@ -744,9 +827,310 @@ async def options() -> OptionsOut:
 # ---------------------------------------------------------------------------
 # Mentors
 # ---------------------------------------------------------------------------
-@app.post(
+# ---------------------------------------------------------------------------
+# The public directory
+#
+# The one part of this API that answers anybody at all, which is why what it
+# returns was chosen field by field rather than trimmed from a mentor's
+# record. See MentorCardOut.
+# ---------------------------------------------------------------------------
+def review_count_of(mentor: Mentor) -> int:
+    """
+    How many reviews a mentor has, or zero.
+
+    Zero rather than null for a mentor with no record yet, because the
+    directory shows it as a count and "no reviews yet" and "zero reviews" are
+    the same thing to someone reading a card.
+    """
+    record = mentor.history
+    if record is None or record.reviews_total is None:
+        return 0
+    return int(record.reviews_total)
+
+
+def mentor_card(mentor: Mentor, service: Service) -> dict[str, Any]:
+    """
+    One mentor and their main service, as the directory shows them.
+
+    Assembled here rather than validated off the ORM objects, because every
+    field is either renamed, derived or deliberately left out, and a response
+    model built from the row would mean a new private column appearing in a
+    public response by default.
+    """
+    return {
+        "id": mentor.id,
+        "display_name": mentor.full_name,
+        "field_label": mapping.field_label(service.field),
+        "service_name": mapping.service_name(service.field, service.max_mentees),
+        "price": service.current_price,
+        "max_mentees": service.max_mentees,
+        "session_label": service.session_label,
+        "verified": bool(mentor.verified),
+        "review_count": review_count_of(mentor),
+    }
+
+
+def main_service_of(session: Session, mentor_id: int) -> Service | None:
+    """
+    The service a mentor's card is about: the first one they published.
+
+    The first rather than the cheapest or the newest, because it is the one
+    they described at registration and the one they are most likely to think
+    of as what they do.
+    """
+    return session.scalar(
+        select(Service)
+        .where(Service.mentor_id == mentor_id)
+        .order_by(Service.id)
+        .limit(1)
+    )
+
+
+def directory_query(field: str | None, group: str | None):
+    """
+    The mentors the directory lists, each with their main service.
+
+    One row per mentor, joined to the lowest service id they own, so a mentor
+    with four services appears once rather than four times. A mentor with no
+    service at all does not appear: there would be nothing on their card to
+    show and no price to compare, and the only way to have none is to have
+    deleted one, since registration creates one.
+
+    Newest first. A directory ordered by id would bury every mentor who joins
+    later, and the point of this list is that a mentor who registered a minute
+    ago is in it on the same terms as a seeded one.
+    """
+    main = (
+        select(Service.mentor_id, func.min(Service.id).label("service_id"))
+        .group_by(Service.mentor_id)
+        .subquery()
+    )
+    query = (
+        select(Mentor, Service)
+        .join(main, main.c.mentor_id == Mentor.id)
+        .join(Service, Service.id == main.c.service_id)
+    )
+    if field is not None:
+        query = query.where(Service.field == mapping.validate_field(field))
+    if group is not None:
+        query = query.where(Service.session_label == validate_group(group))
+    return query.order_by(Mentor.created_at.desc(), Mentor.id.desc())
+
+
+def validate_group(value: Any) -> str:
+    """Which of the two sizes of session a directory filter asked for."""
+    if value not in mapping.SESSION_LABELS:
+        allowed = ", ".join(mapping.SESSION_LABELS)
+        raise mapping.MentorInputError(
+            "group", f"Mentors can be filtered by session type: {allowed}."
+        )
+    return str(value)
+
+
+@app.get(
     "/mentors",
-    tags=["mentors"],
+    tags=["directory"],
+    response_model=MentorDirectoryOut,
+    responses={422: ERROR_RESPONSE},
+    summary="The public list of mentors",
+)
+async def read_directory(
+    field: str | None = Query(
+        default=None,
+        description="Only mentors in this field, from /meta/options.",
+        examples=["technology_software"],
+    ),
+    group: str | None = Query(
+        default=None,
+        description=(
+            'Only one-to-one sessions ("one_to_one") or only group sessions '
+            '("group").'
+        ),
+        examples=["one_to_one"],
+    ),
+    limit: int = Query(default=DIRECTORY_DEFAULT_LIMIT, ge=1, le=DIRECTORY_MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> MentorDirectoryOut:
+    """
+    Every mentor on the platform, newest first, as cards.
+
+    No token: this is the list a mentee reads before they have an account,
+    and the one a mentor sees their own profile appear on. A mentor who
+    registered a minute ago is listed on exactly the same terms as a seeded
+    demonstration mentor, with their verification shown as what it is, which
+    is false until somebody has checked them.
+
+    ``total`` counts every mentor the filters match rather than the ones on
+    this page, so a frontend can say how many there are without asking for all
+    of them.
+    """
+    query = directory_query(field, group)
+    total = int(session.scalar(select(func.count()).select_from(query.subquery())) or 0)
+    rows = session.execute(query.limit(limit).offset(offset)).all()
+    return MentorDirectoryOut(
+        total=total,
+        limit=limit,
+        offset=offset,
+        items=[
+            MentorCardOut(**mentor_card(mentor, service)) for mentor, service in rows
+        ],
+    )
+
+
+@app.get(
+    "/mentors/{mentor_id}/public",
+    tags=["directory"],
+    response_model=PublicMentorOut,
+    responses={404: ERROR_RESPONSE},
+    summary="One mentor's public profile",
+)
+async def read_public_profile(
+    mentor_id: int, session: Session = Depends(get_session)
+) -> PublicMentorOut:
+    """
+    The card a mentee clicked on, with what the mentor chose to say.
+
+    The same fields as the directory plus the skills they offer and the three
+    optional profile fields, each null where the mentor left it blank. Nothing
+    private: no address, no verification of anyone else's, and none of the
+    figures a model reads.
+
+    A mentor with no service is reported as missing rather than as a profile
+    with nothing in it, which is the same answer the directory gives by
+    leaving them out.
+    """
+    mentor = session.get(Mentor, mentor_id)
+    service = main_service_of(session, mentor_id) if mentor is not None else None
+    if mentor is None or service is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
+        )
+    return PublicMentorOut(
+        **mentor_card(mentor, service),
+        skills=[
+            SkillOut(id=skill, label=mapping.SKILLS[skill])
+            for skill in (service.skills or [])
+            if skill in mapping.SKILLS
+        ],
+        years_experience=mentor.years_experience,
+        years_mentoring_band=mentor.years_mentoring_band,
+        education_level=mentor.education_level,
+        education_label=(
+            mapping.EDUCATION_LEVELS.get(mentor.education_level)
+            if mentor.education_level
+            else None
+        ),
+        credentials=mentor.credentials,
+    )
+
+
+# ---------------------------------------------------------------------------
+# The live preview
+# ---------------------------------------------------------------------------
+@app.post(
+    "/preview",
+    tags=["pricing"],
+    response_model=PreviewOut,
+    responses={422: ERROR_RESPONSE, 429: ERROR_RESPONSE, 503: ERROR_RESPONSE},
+    summary="Price a part-filled registration form, without storing anything",
+)
+async def preview_price(
+    payload: PreviewInput,
+    request: Request,
+    pricing: PricingService = Depends(get_pricing),
+) -> PreviewOut:
+    """
+    What the form will say, while it is still being filled in.
+
+    The same three answers, the same validation and the same model as
+    registration, so the number a mentor watches while they type is the number
+    they are given when they submit. The two other answers registration needs
+    are the ones it does not ask: a new account is unverified, and a mentor
+    being priced has one service.
+
+    **Nothing is written.** There is no mentor to write it against, and a
+    preview is not advice anybody has been offered: the record of what the
+    system advised and what the mentor did about it starts at registration.
+
+    Rate limited per address, because this is the one endpoint with no account
+    behind it and every call scores a model. See src.mentor.rate_limit for
+    exactly how little that limit claims to be.
+    """
+    caller = request.client.host if request.client else "unknown"
+    if not preview_limiter.allow(caller):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=PREVIEW_RATE_LIMIT_MESSAGE,
+            headers={"Retry-After": str(preview_limiter.retry_after(caller))},
+        )
+
+    advice = pricing.predict(
+        mapping.to_model_inputs(
+            field=payload.field,
+            max_mentees=payload.max_mentees,
+            min_commitment=mapping.MIN_COMMITMENT_DEFAULT,
+            skills=list(payload.skills),
+            profile_verified=False,
+            services_count=1,
+        )
+    )
+    return PreviewOut(
+        session_price=advice.recommended_price,
+        per_person_price=advice.price_per_mentee,
+        range_low=advice.price_low,
+        range_high=advice.price_high,
+        low_confidence=advice.low_confidence,
+    )
+
+
+def issued_token(mentor_id: int) -> dict[str, Any]:
+    """The token fields of a response, built in one place for both endpoints."""
+    return {
+        "access_token": security.create_access_token(mentor_id),
+        "token_type": security.TOKEN_TYPE,
+        "expires_in": security.token_lifetime_seconds(),
+    }
+
+
+def mentor_by_email(session: Session, email: str) -> Mentor | None:
+    """
+    The account registered to one address, matched without case.
+
+    Addresses are lowercased before they are stored, so the comparison is
+    already like for like. It is lowercased on both sides anyway, because a
+    row written by something other than this application is the case the
+    unique index on the lowercased column exists for, and a sign-in that
+    could not find such a row would be a confusing way to discover it.
+    """
+    return session.scalar(
+        select(Mentor).where(
+            func.lower(Mentor.email) == security.normalise_email(email)
+        )
+    )
+
+
+def signed_in_mentor(
+    session: Session = Depends(get_session),
+    current_mentor_id: int = Depends(get_current_mentor_id),
+) -> Mentor:
+    """
+    The mentor the token belongs to, or 401.
+
+    A token that is perfectly valid but names a mentor who no longer exists is
+    not a request for a missing record: it is an identity that cannot be
+    established, which is what 401 means. That is the one case where a signed
+    request answers 401 rather than 404.
+    """
+    mentor = session.get(Mentor, current_mentor_id)
+    if mentor is None:
+        raise unauthorized()
+    return mentor
+
+
+@app.post(
+    "/auth/register",
+    tags=["auth"],
     response_model=RegistrationOut,
     status_code=status.HTTP_201_CREATED,
     responses={409: ERROR_RESPONSE, 422: ERROR_RESPONSE, 503: ERROR_RESPONSE},
@@ -758,32 +1142,47 @@ async def register_mentor(
     pricing: PricingService = Depends(get_pricing),
 ) -> RegistrationOut:
     """
-    Register and return the first price in one call.
+    Register, sign in and return the first price in one call.
 
-    One call rather than three because a mentor who has just filled in the
-    form is waiting for the number: asking the frontend to chain three
-    requests would show them an empty service first.
+    One call rather than four because a mentor who has just filled in the form
+    is waiting for the number: asking the frontend to chain the account, the
+    profile, the service and the price would show them an empty service
+    first, and would leave a mentor whose connection dropped halfway with an
+    account and nothing in it.
 
-    No identity header: this is the request that creates the identity.
+    No token on this request: this is the request that creates the identity,
+    and the response carries the token for every request after it.
+
+    The account starts unverified. Verification is a statement the platform
+    makes about a mentor after a person has looked, so nothing a mentor sends
+    can set it, including on this endpoint.
     """
     mentor = Mentor(
-        full_name=payload.full_name,
+        full_name=payload.name,
         email=payload.email,
+        password_hash=security.hash_password(payload.password),
+        verified=False,
         headline=payload.headline,
         bio=payload.bio,
         education_level=payload.education_level,
         experience_summary=payload.experience_summary,
         credentials=payload.credentials,
-        years_mentoring_band=payload.years_mentoring_band,
-        services_planned=payload.services_planned,
+        years_experience=payload.years_experience,
+        years_mentoring_band=(
+            mapping.years_mentoring_band_for_experience(payload.years_experience)
+            if payload.years_experience is not None
+            else None
+        ),
     )
     service = Service(
-        session_label=mapping.session_label(payload.service.max_mentees),
-        field=payload.service.field,
-        max_mentees=payload.service.max_mentees,
-        min_commitment=payload.service.min_commitment,
-        skills=list(payload.service.skills),
-        profile_verified=payload.service.profile_verified,
+        session_label=mapping.session_label(payload.max_mentees),
+        field=payload.field,
+        max_mentees=payload.max_mentees,
+        min_commitment=payload.min_commitment,
+        skills=list(payload.skills),
+        # Follows the account rather than the form. A new mentor is
+        # unverified, and this column is what the model is given for it.
+        profile_verified=False,
     )
     mentor.services.append(service)
     session.add(mentor)
@@ -799,10 +1198,116 @@ async def register_mentor(
 
     record = recommend_for_service(session, pricing, service, mentor)
     return RegistrationOut(
+        **issued_token(mentor.id),
         mentor=as_mentor(mentor),
         service=ServiceOut.model_validate(service),
         recommendation=as_recommendation(record, service.current_price),
     )
+
+
+@app.post(
+    "/auth/login",
+    tags=["auth"],
+    response_model=LoginOut,
+    responses={401: ERROR_RESPONSE, 422: ERROR_RESPONSE},
+    summary="Sign in with an email address and a password",
+)
+async def login(
+    payload: MentorLogin,
+    session: Session = Depends(get_session),
+) -> LoginOut:
+    """
+    Exchange a password for an access token.
+
+    An address nobody has registered and a wrong password give the same
+    answer, and take about the same time to give it: the unknown case is
+    verified against a hash no password matches rather than returning
+    immediately. Either answer would otherwise tell a caller which addresses
+    have accounts on the platform, which is a question they did not ask and
+    are not entitled to.
+    """
+    mentor = mentor_by_email(session, payload.email)
+    password_hash = mentor.password_hash if mentor is not None else None
+    if not security.verify_password(payload.password, password_hash):
+        raise unauthorized(SIGN_IN_FAILED_MESSAGE)
+    return LoginOut(**issued_token(mentor.id), mentor=as_mentor(mentor))
+
+
+@app.get(
+    "/auth/me",
+    tags=["auth"],
+    response_model=MentorOut,
+    responses={401: ERROR_RESPONSE},
+    summary="The mentor the current token belongs to",
+)
+async def read_me(mentor: Mentor = Depends(signed_in_mentor)) -> MentorOut:
+    """
+    Who the caller is, according to the token they sent.
+
+    What the frontend calls on a page load to decide whether it is signed in,
+    and the endpoint that says a token has expired.
+
+    **There is no sign-out endpoint.** The token is signed rather than stored,
+    so the server holds no session to end: signing out is the client
+    discarding the token, after which no request carries an identity at all. A
+    token that has already been issued stays valid until it expires, which is
+    why it expires in seven days.
+    """
+    return as_mentor(mentor)
+
+
+@app.patch(
+    "/mentors/me",
+    tags=["mentors"],
+    response_model=MentorOut,
+    responses={401: ERROR_RESPONSE, 422: ERROR_RESPONSE},
+    summary="Edit the mentor's own name and optional profile fields",
+)
+async def update_me(
+    payload: MentorUpdate,
+    session: Session = Depends(get_session),
+    mentor: Mentor = Depends(signed_in_mentor),
+) -> MentorOut:
+    """
+    Change the mentor's name, years of experience, education or credentials.
+
+    Those four and nothing else. The address they sign in with, their
+    verification and everything about a service are each settled somewhere
+    with a reason of its own, and a general-purpose profile edit that could
+    reach them would make those reasons unenforceable.
+
+    A field that was not sent is left alone. A field sent as null is cleared,
+    which is how a mentor removes something they would rather not show. The
+    experience band shown on their profile follows the number of years, so
+    clearing the years clears the band with it rather than leaving a band
+    behind that no longer describes anything.
+
+    None of these fields reaches a model, so a price never changes because of
+    an edit here.
+    """
+    changes = payload.model_dump(exclude_unset=True)
+    if "name" in changes:
+        if changes["name"] is None:
+            raise mapping.MentorInputError(
+                "name", "Enter the name to show on your profile."
+            )
+        mentor.full_name = changes["name"]
+    if "years_experience" in changes:
+        years = changes["years_experience"]
+        mentor.years_experience = years
+        mentor.years_mentoring_band = (
+            mapping.years_mentoring_band_for_experience(years)
+            if years is not None
+            else None
+        )
+    if "education_level" in changes:
+        mentor.education_level = changes["education_level"]
+    if "credentials" in changes:
+        mentor.credentials = changes["credentials"]
+
+    session.commit()
+    session.refresh(mentor)
+    return as_mentor(mentor)
 
 
 # Declared before /mentors/{mentor_id}, because routes are matched in the
@@ -925,7 +1430,8 @@ async def add_service(
         max_mentees=payload.max_mentees,
         min_commitment=payload.min_commitment,
         skills=list(payload.skills),
-        profile_verified=payload.profile_verified,
+        # From the account, not from the body. See ServiceInput.
+        profile_verified=bool(mentor.verified),
     )
     session.add(service)
     session.commit()
@@ -936,6 +1442,29 @@ async def add_service(
         service=ServiceOut.model_validate(service),
         recommendation=as_recommendation(record, service.current_price),
     )
+
+
+@app.get(
+    "/services/{service_id}",
+    tags=["mentors"],
+    response_model=ServiceOut,
+    responses={401: ERROR_RESPONSE, 404: ERROR_RESPONSE},
+    summary="One of the mentor's own services",
+)
+async def read_service(
+    service_id: int,
+    session: Session = Depends(get_session),
+    current_mentor_id: int = Depends(get_current_mentor_id),
+) -> ServiceOut:
+    """
+    One service, with what it currently charges.
+
+    The mentor's own record already lists every service they have, so this is
+    for a page about one of them: a frontend that has a service id and would
+    otherwise fetch the whole mentor to render a single service.
+    """
+    service = owned_service(session, service_id, current_mentor_id)
+    return ServiceOut.model_validate(service)
 
 
 # ---------------------------------------------------------------------------
@@ -984,9 +1513,15 @@ async def read_recommendation(
     session: Session = Depends(get_session),
     current_mentor_id: int = Depends(get_current_mentor_id),
 ) -> RecommendationOut:
-    """One of the mentor's own recommendations, scoped through its service."""
+    """
+    One of the mentor's own recommendations, scoped through its service.
+
+    Carries the mentor's decision when they have answered this price, so a
+    frontend showing one price does not have to ask a second time to find out
+    whether it still stands.
+    """
     record = owned_recommendation(session, recommendation_id, current_mentor_id)
-    return as_recommendation(record, record.service.current_price)
+    return as_recommendation(record, record.service.current_price, with_decision=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1213,6 +1748,151 @@ async def read_service_history(
 
 
 # ---------------------------------------------------------------------------
+# A mentor's activity over time
+# ---------------------------------------------------------------------------
+NO_ACTIVITY_NOTE = (
+    "There is nothing to show here yet. This is where your sessions and "
+    "reviews will appear once you have been mentoring on the platform."
+)
+
+# How many months at each end are compared to say whether something is picking
+# up. A quarter: one month against one month is a fluctuation rather than a
+# direction, and half the period against the other half describes a year ago
+# as though it were news.
+TREND_MONTHS = 3
+
+
+def direction_of(values: list[float]) -> str:
+    """
+    Whether a series ends higher than it started, in one word.
+
+    The last few months against the first few, rather than the last value
+    against the first: a mentor who had a quiet August has not had a bad year,
+    and a sentence that said so would be wrong the following month.
+
+    "about the same" is deliberately wide. These are small counts, and a
+    sentence claiming a rise on the strength of one extra review would be a
+    sentence about noise.
+    """
+    if len(values) < 2:
+        return "about the same"
+    window = min(TREND_MONTHS, len(values) // 2) or 1
+    start = sum(values[:window]) / window
+    end = sum(values[-window:]) / window
+    if start == 0:
+        return "more" if end > 0 else "about the same"
+    change = (end - start) / start
+    if change > 0.2:
+        return "more"
+    if change < -0.2:
+        return "less"
+    return "about the same"
+
+
+def activity_note(rows: list[MentorActivity]) -> str:
+    """
+    One plain sentence about the period, from whatever it has in it.
+
+    Written here rather than in a frontend, so the one statement the platform
+    makes about a mentor's own figures is one statement. It describes the
+    measure it actually has: the price when the platform has a price per
+    month, and otherwise the reviews, which it always has. It never describes
+    a measure that is missing, and it claims no direction from a single month.
+    """
+    if not rows:
+        return NO_ACTIVITY_NOTE
+
+    months = len(rows)
+    prices = [float(row.price) for row in rows if row.price is not None]
+    if len(prices) >= 2:
+        moved = direction_of(prices)
+        if moved == "about the same":
+            return (
+                f"Your price has stayed about the same over the last "
+                f"{months} months."
+            )
+        word = "gone up" if moved == "more" else "come down"
+        return f"Your price has {word} over the last {months} months."
+
+    reviews = [float(row.reviews_count) for row in rows]
+    total = int(sum(reviews))
+    if total == 0:
+        return (
+            f"You have had no reviews in the last {months} months, so there "
+            f"is nothing in this period to read a trend from."
+        )
+    moved = direction_of(reviews)
+    if moved == "about the same":
+        return (
+            f"You have {total} reviews over the last {months} months, at "
+            f"about a steady rate."
+        )
+    word = "picking up" if moved == "more" else "slowing down"
+    return (
+        f"You have {total} reviews over the last {months} months, and recent "
+        f"months are {word}."
+    )
+
+
+@app.get(
+    "/mentors/{mentor_id}/activity",
+    tags=["mentors"],
+    response_model=ActivityOut,
+    responses={401: ERROR_RESPONSE, 404: ERROR_RESPONSE},
+    summary="A mentor's own activity, month by month",
+)
+async def read_activity(
+    mentor_id: int,
+    session: Session = Depends(get_session),
+    current_mentor_id: int = Depends(get_current_mentor_id),
+) -> ActivityOut:
+    """
+    What the mentor has done, month by month, and one sentence about it.
+
+    Their own and only their own: another mentor's activity returns 404, like
+    every other mentor-scoped record. It is not on the public directory at
+    all, because how busy somebody has been is theirs to share.
+
+    A mentor with nothing recorded yet, which is every mentor who has just
+    registered, gets ``has_history: false``, four empty lists and a sentence
+    saying what will appear here. Not an error: having no history is the
+    ordinary state of a new account rather than a missing record.
+
+    Where a measurement does not exist for a month, the entry is null rather
+    than zero. See ActivityOut: a zero would be a claim the platform cannot
+    make, and the two are not the same thing to a mentor reading a chart.
+    """
+    mentor = session.scalar(
+        select(Mentor).where(Mentor.id == mentor_id, Mentor.id == current_mentor_id)
+    )
+    if mentor is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
+        )
+
+    rows = list(
+        session.scalars(
+            select(MentorActivity)
+            .where(MentorActivity.mentor_id == mentor.id)
+            .order_by(MentorActivity.month)
+        )
+    )
+    return ActivityOut(
+        has_history=bool(rows),
+        months=[row.month.isoformat() for row in rows],
+        reviews_by_month=[int(row.reviews_count) for row in rows],
+        booked_share_by_month=[
+            float(row.booked_share) if row.booked_share is not None else None
+            for row in rows
+        ],
+        price_by_month=[
+            int(row.price) if row.price is not None else None for row in rows
+        ],
+        note=activity_note(rows),
+    )
+
+
+# ---------------------------------------------------------------------------
 # The dashboard
 # ---------------------------------------------------------------------------
 def dashboard_service(
@@ -1276,6 +1956,107 @@ def dashboard_service(
     )
 
 
+# ---------------------------------------------------------------------------
+# The one sentence the dashboard opens with
+#
+# Written here, on the server, so that the single statement the platform makes
+# about a mentor's price is one statement rather than one per frontend. Plain
+# words, no percentages and no model terms: a mentor opening their page wants
+# to know whether they are charging roughly what people like them charge, and
+# every number behind the sentence is reported beside it for anyone who wants
+# the figures.
+# ---------------------------------------------------------------------------
+NO_SERVICE_SENTENCE = "Add a service to see how your price compares with other mentors."
+
+NO_COMPARISON_SENTENCE = (
+    "There are not enough other mentors to compare your price with yet."
+)
+
+NO_PRICE_SENTENCE = "You have not set a price for this service yet."
+
+TYPICAL_SENTENCE = "Other {phrase} charge about {price:,} {currency} for a session."
+
+SAME_SENTENCE = "You charge about the same as other {phrase}."
+LESS_SENTENCE = "You charge less than most other {phrase}."
+MORE_SENTENCE = "You charge more than most other {phrase}."
+
+
+def comparison_phrase(found: comparables_module.ComparableSet, service: Service) -> str:
+    """
+    Who the sentence is comparing the mentor with, in words.
+
+    Three phrasings for the three levels the match can reach, because the
+    sentence has to stay true: a comparison that had to widen to every field
+    cannot be described as "in your field", and one that widened to every
+    group size cannot be described as one-to-one or group.
+    """
+    session_word = (
+        "one-to-one" if service.session_label == mapping.LABEL_ONE_TO_ONE else "group"
+    )
+    if found.match_level == comparables_module.MATCH_SAME_FIELD_AND_SIZE:
+        return f"{session_word} mentors in your field"
+    if found.match_level == comparables_module.MATCH_SAME_FIELD:
+        return "mentors in your field"
+    return f"{session_word} mentors on the platform"
+
+
+def headline_of(
+    mentor: Mentor,
+    service: Service | None,
+    table: comparables_module.ComparablesTable | None,
+) -> DashboardHeadlineOut:
+    """
+    The mentor's price, a typical comparable price, and the sentence between.
+
+    ``position_vs_range`` here is against the middle half of comparable
+    mentors rather than against the advised range: the question this block
+    answers is how the mentor compares with other people, and the quartiles
+    are the range a typical one of them charges. The advised range is reported
+    per service, on the recommendation itself, where it belongs.
+    """
+    if service is None:
+        return DashboardHeadlineOut(sentence=NO_SERVICE_SENTENCE)
+
+    found = comparables_for(table, service, mentor) if table is not None else None
+    summary = comparables_module.summarise(found) if found is not None else None
+    typical = summary["median_price"] if summary else None
+    price = service.current_price
+
+    if typical is None or found is None or found.count == 0:
+        return DashboardHeadlineOut(
+            your_price=price,
+            sentence=(NO_PRICE_SENTENCE if not price else NO_COMPARISON_SENTENCE),
+        )
+
+    phrase = comparison_phrase(found, service)
+    if not price:
+        return DashboardHeadlineOut(
+            similar_typical=typical,
+            sentence=(
+                f"{NO_PRICE_SENTENCE} "
+                + TYPICAL_SENTENCE.format(
+                    phrase=phrase, price=typical, currency=mapping.CURRENCY
+                )
+            ),
+        )
+
+    low = summary["p25_price"] or typical
+    high = summary["p75_price"] or typical
+    position = position_vs_range(int(price), int(low), int(high))
+    sentence = {
+        POSITION_BELOW: LESS_SENTENCE,
+        POSITION_WITHIN: SAME_SENTENCE,
+        POSITION_ABOVE: MORE_SENTENCE,
+    }[position].format(phrase=phrase)
+
+    return DashboardHeadlineOut(
+        your_price=int(price),
+        similar_typical=typical,
+        position_vs_range=position,
+        sentence=sentence,
+    )
+
+
 @app.get(
     "/mentors/{mentor_id}/dashboard",
     tags=["mentors"],
@@ -1302,8 +2083,13 @@ async def read_dashboard(
     mentor charges, what was advised, how far their decisions have sat from
     the advice, and where their price falls among comparable mentors.
 
+    ``headline`` is the one line the page opens with, about the mentor's main
+    service: what they charge, what a typical comparable mentor charges, and
+    one plain sentence saying which side of that they are on.
+
     A server with no comparison table still answers. ``comparables_available``
-    says so, and the two fields that need it are null.
+    says so, the fields that need it are null, and the headline sentence says
+    there is nothing to compare with rather than claiming anything.
     """
     mentor = session.scalar(
         select(Mentor).where(Mentor.id == mentor_id, Mentor.id == current_mentor_id)
@@ -1323,6 +2109,9 @@ async def read_dashboard(
     return DashboardOut(
         mentor_id=mentor.id,
         display_name=mentor.full_name,
+        headline=headline_of(
+            mentor, mentor.services[0] if mentor.services else None, table
+        ),
         currency=mapping.CURRENCY,
         comparables_available=table is not None,
         totals=DashboardTotalsOut(

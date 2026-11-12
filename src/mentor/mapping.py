@@ -229,10 +229,21 @@ MAX_MENTEES_MAX = 8
 # a value the model has seen plenty of.
 MIN_COMMITMENT_OPTIONS: tuple[int, ...] = (1, 2, 3, 5, 7)
 
-# 4 means "four or more". The model's equivalent column saturates: beyond four
-# the price stops moving, so there is nothing to gain from asking for more
-# precision.
-SERVICES_PLANNED_OPTIONS: tuple[int, ...] = (1, 2, 3, 4)
+# What a service commits a mentee to when nobody said. One session: the
+# smallest thing the platform offers and the one that asks least of a mentee,
+# so a mentor who never answered the question has not had a commitment set on
+# their behalf that a mentee has to meet.
+MIN_COMMITMENT_DEFAULT = MIN_COMMITMENT_OPTIONS[0]
+
+# How many services the model is told a mentor runs, at most. Its equivalent
+# column saturates: beyond four the price stops moving, so a mentor with nine
+# services is priced as one with four.
+#
+# The number itself is no longer asked. The registration form used to ask how
+# many services a mentor planned to offer, which was a question about the
+# future that a mentor had no way to answer accurately and that moved their
+# price. What the model is given now is what the platform can see: how many
+# services the mentor has actually published. See effective_services.
 SERVICES_CAP = 4
 
 # ---------------------------------------------------------------------------
@@ -263,6 +274,16 @@ NEW_MENTOR_TENURE_YEARS = 0.5
 # longer tenure goes with a lower price, which describes that dataset rather
 # than anything true about mentoring, and routing a mentor's experience into
 # that column would advise the most experienced of them to charge the least.
+#
+# Asked as a number of years, which is what a mentor knows about themselves,
+# and banded for display. Optional: a mentor who would rather not say leaves
+# it out, and nothing about their price changes either way.
+YEARS_EXPERIENCE_MIN = 0
+
+# Sixty years of mentoring is longer than any career. The ceiling is a typing
+# guard rather than a claim: it catches a year typed into a years box.
+YEARS_EXPERIENCE_MAX = 60
+
 YEARS_MENTORING_BANDS: dict[str, str] = {
     "under_1": "Under 1 year",
     "1_to_2": "1 to 2 years",
@@ -526,16 +547,28 @@ def validate_years_mentoring(value: Any) -> str:
     return str(value)
 
 
-def validate_services_planned(value: Any) -> int:
-    """How many services the mentor intends to offer, asked at registration."""
-    if isinstance(value, bool) or value not in SERVICES_PLANNED_OPTIONS:
-        allowed = ", ".join(str(option) for option in SERVICES_PLANNED_OPTIONS)
+def validate_years_experience(value: Any) -> int:
+    """
+    How many years the mentor has been mentoring. Profile only.
+
+    Optional on the form, so ``None`` is handled by the caller rather than
+    here: this is the rule for a number that was given. Booleans are rejected
+    explicitly, as everywhere else a whole number is read.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
         raise MentorInputError(
-            "services_planned",
-            f"Choose how many services the mentor plans to offer. The options "
-            f"are {allowed}, where {SERVICES_CAP} means {SERVICES_CAP} or more.",
+            "years_experience",
+            f"Enter how many years you have been mentoring as a whole number "
+            f"between {YEARS_EXPERIENCE_MIN} and {YEARS_EXPERIENCE_MAX}, or "
+            f"leave it blank.",
         )
-    return int(value)
+    if not YEARS_EXPERIENCE_MIN <= value <= YEARS_EXPERIENCE_MAX:
+        raise MentorInputError(
+            "years_experience",
+            f"The number of years you have been mentoring has to be between "
+            f"{YEARS_EXPERIENCE_MIN} and {YEARS_EXPERIENCE_MAX}.",
+        )
+    return value
 
 
 def validate_services_count(value: Any) -> int:
@@ -583,17 +616,22 @@ def validate_final_price(value: Any, *, field: str = "final_price") -> int:
     return value
 
 
-def effective_services(services_count: int, services_planned: int) -> int:
+def effective_services(services_count: int) -> int:
     """
-    The service count the model is given.
+    The service count the model is given: what the mentor has published.
 
-    A mentor who said at registration that they plan four services but has
-    published one is priced as someone with a four-service offering: the
-    intention is the better description of the practice, and pricing the first
-    service as though it were the only one they will ever have would
-    under-price it. The larger of the two wins, then the cap applies.
+    At least one, because this is only ever asked while pricing a service and
+    a mentor being priced has one, and at most :data:`SERVICES_CAP`, where the
+    model's equivalent column stops moving.
+
+    It used to be the larger of what the mentor had published and what they
+    said at registration they planned to offer. That question is no longer
+    asked: it was a guess about the future that moved the mentor's price
+    today, and a mentor who over-estimated their plans was quoted a price
+    built on services that did not exist. What the platform can see is what it
+    uses.
     """
-    return min(max(services_count, services_planned), SERVICES_CAP)
+    return min(max(services_count, 1), SERVICES_CAP)
 
 
 def session_label(max_mentees: Any) -> str:
@@ -637,8 +675,7 @@ def to_model_inputs(
     min_commitment: Any,
     skills: Any,
     profile_verified: Any,
-    services_planned: Any,
-    services_count: Any = 0,
+    services_count: Any = 1,
 ) -> dict[str, Any]:
     """
     Translate one new mentor's answers into the eight core model columns.
@@ -658,7 +695,6 @@ def to_model_inputs(
     commitment = validate_min_commitment(min_commitment)
     chosen_skills = validate_skills(skills)
     verified = validate_profile_verified(profile_verified)
-    planned = validate_services_planned(services_planned)
     count = validate_services_count(services_count)
 
     return {
@@ -669,7 +705,7 @@ def to_model_inputs(
         COLUMN_SKILLS: skills_to_column_value(chosen_skills),
         COLUMN_VERIFIED: int(verified),
         COLUMN_TENURE: float(NEW_MENTOR_TENURE_YEARS),
-        COLUMN_SERVICES: effective_services(count, planned),
+        COLUMN_SERVICES: effective_services(count),
     }
 
 
@@ -878,6 +914,34 @@ def field_label(field_id: Any) -> str:
     return FIELDS[validate_field(field_id)]["label"]
 
 
+def service_name(field_id: Any, max_mentees: Any) -> str:
+    """
+    What to call one service, in a line a mentee could read on a card.
+
+    Derived rather than asked, for the same reason the session label is: a
+    mentor describes a service by choosing a field and a group size, and a
+    name typed separately would be a third description of the same thing that
+    could disagree with both. The field label keeps its capital, because it is
+    a proper label rather than a word in the sentence.
+    """
+    label = field_label(field_id)
+    mentees = validate_max_mentees(max_mentees)
+    if mentees < GROUP_FROM_MENTEES:
+        return f"{label}: one-to-one mentoring"
+    return f"{label}: group mentoring"
+
+
+def years_mentoring_band_for_experience(years: Any) -> str:
+    """
+    The band a number of years of mentoring falls in.
+
+    The form asks for the number, which is what a mentor knows about
+    themselves, and their profile shows the band, which is what a mentee needs
+    to read. Both are profile text and neither reaches a model.
+    """
+    return years_mentoring_band_for_tenure(validate_years_experience(years))
+
+
 def skills_count_from_column_value(value: Any) -> int:
     """
     How many skills a breadth-of-offering value stands for.
@@ -960,20 +1024,16 @@ def get_form_options() -> dict[str, Any]:
             }
             for option in MIN_COMMITMENT_OPTIONS
         ],
+        "min_commitment_default": MIN_COMMITMENT_DEFAULT,
         "years_mentoring_bands": [
             {"id": key, "label": label} for key, label in YEARS_MENTORING_BANDS.items()
         ],
-        "services_planned": [
-            {
-                "id": option,
-                "label": (
-                    f"{option} or more services"
-                    if option == SERVICES_CAP
-                    else (f"{option} service" if option == 1 else f"{option} services")
-                ),
-            }
-            for option in SERVICES_PLANNED_OPTIONS
-        ],
+        # A number of years rather than a list to pick from, and optional.
+        # The bands above are how it is shown, not how it is asked.
+        "years_experience": {
+            "min": YEARS_EXPERIENCE_MIN,
+            "max": YEARS_EXPERIENCE_MAX,
+        },
         "education_levels": [
             {"id": key, "label": label} for key, label in EDUCATION_LEVELS.items()
         ],

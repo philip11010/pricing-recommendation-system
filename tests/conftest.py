@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import PROJECT_ROOT
 from src.db import Base, create_db_engine, get_session
+from src.mentor import mapping
 from src.mentor.comparables import (
     COMPARABLES_FILENAME,
     ComparablesTable,
@@ -52,6 +53,7 @@ from src.mentor.prediction import (
     AssetsUnavailableError,
     load_pricing_service,
 )
+from src.mentor.security import AUTH_HEADER, create_access_token
 
 ASSETS_SKIP_REASON = (
     "prepared models are missing from app_assets/; they are a local build "
@@ -101,6 +103,73 @@ SYNTHETIC_HISTORY: dict[str, object] = {
     "has_booking_data": True,
     "tenure_years": 4.0,
 }
+
+
+# ---------------------------------------------------------------------------
+# Registering and signing in
+#
+# Every API test needs an account, and almost every one needs a token for it,
+# so both are built here rather than four times over.
+#
+# The token is minted directly from a mentor id rather than taken from a
+# response. The tokens are signed and carry nothing but the id and an expiry,
+# so a minted one is indistinguishable from an issued one, and it lets a test
+# ask a question that matters: what happens when a perfectly valid token names
+# somebody else's mentor id.
+# ---------------------------------------------------------------------------
+REGISTRATION: dict[str, object] = {
+    "name": "A. Mentor",
+    "email": "mentor@example.com",
+    "password": "a-long-enough-password",
+    "field": "technology_software",
+    "max_mentees": 1,
+    "min_commitment": 1,
+    "skills": ["cv_review", "interview_preparation", "career_planning"],
+    "years_experience": 7,
+    "education_level": "masters",
+    "credentials": "Chartered engineer.",
+    "headline": "Helping graduate engineers find their first role",
+    "bio": "Twelve years in software, six of them leading teams.",
+    "experience_summary": "Senior engineer, then engineering manager.",
+}
+
+
+def registration(**overrides) -> dict:
+    """The registration body, with any answer replaced."""
+    return {**REGISTRATION, **overrides}
+
+
+def register(client, **overrides) -> dict:
+    """Register one mentor and return the whole response body."""
+    response = client.post("/auth/register", json=registration(**overrides))
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def headers(mentor_id: int) -> dict[str, str]:
+    """The authorization header for one mentor."""
+    return {AUTH_HEADER: f"Bearer {create_access_token(mentor_id)}"}
+
+
+def registered_model_inputs(**overrides) -> dict:
+    """
+    The model row :data:`REGISTRATION` produces, built from the mapping layer.
+
+    What a test checks a returned price against: a registration routed through
+    the wrong column, or given an input the form no longer sends, comes back
+    as a different number rather than as an error.
+    """
+    answers = registration(**overrides)
+    return mapping.to_model_inputs(
+        field=answers["field"],
+        max_mentees=answers["max_mentees"],
+        min_commitment=answers["min_commitment"],
+        skills=answers["skills"],
+        # A new account is unverified, and nothing on the form can say
+        # otherwise.
+        profile_verified=False,
+        services_count=1,
+    )
 
 
 def assets_present(assets_dir: Path = APP_ASSETS_DIR) -> bool:

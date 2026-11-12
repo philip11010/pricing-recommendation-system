@@ -19,46 +19,17 @@ import pytest
 
 from src.db.mentor_models import Mentor, MentorHistory, Service
 from src.mentor import mapping
-from src.mentor.dependencies import MENTOR_ID_HEADER
 
-from .conftest import SYNTHETIC_HISTORY
+from .conftest import (
+    REGISTRATION,
+    SYNTHETIC_HISTORY,
+    headers,
+    register,
+    registered_model_inputs,
+    registration,
+)
 
 pytestmark = pytest.mark.app_assets
-
-REGISTRATION = {
-    "full_name": "A. Mentor",
-    "email": "mentor@example.com",
-    "years_mentoring_band": "3_to_5",
-    "services_planned": 1,
-    "headline": "Helping graduate engineers find their first role",
-    "bio": "Twelve years in software, six of them leading teams.",
-    "education_level": "masters",
-    "experience_summary": "Senior engineer, then engineering manager.",
-    "credentials": "Chartered engineer.",
-    "service": {
-        "field": "technology_software",
-        "max_mentees": 1,
-        "min_commitment": 1,
-        "skills": ["cv_review", "interview_preparation", "career_planning"],
-        "profile_verified": True,
-    },
-}
-
-
-def registration(**overrides):
-    payload = {**REGISTRATION, **overrides}
-    payload["service"] = {**REGISTRATION["service"], **overrides.get("service", {})}
-    return payload
-
-
-def register(client, **overrides):
-    response = client.post("/mentors", json=registration(**overrides))
-    assert response.status_code == 201, response.text
-    return response.json()
-
-
-def headers(mentor_id: int) -> dict[str, str]:
-    return {MENTOR_ID_HEADER: str(mentor_id)}
 
 
 def give_history(sessions, mentor_id: int, **overrides) -> None:
@@ -223,14 +194,16 @@ def test_a_mentor_can_read_their_own_record(client):
 def test_the_same_email_cannot_register_twice(client):
     register(client)
 
-    response = client.post("/mentors", json=registration())
+    response = client.post("/auth/register", json=registration())
 
     assert response.status_code == 409
-    assert "already exists" in response.json()["detail"]
+    # Neutral on purpose: a message naming the address would confirm to
+    # anyone who typed it that an account exists on it.
+    assert "cannot be used" in response.json()["detail"]
 
 
 def test_registering_without_models_explains_itself(modelless_client):
-    response = modelless_client.post("/mentors", json=registration())
+    response = modelless_client.post("/auth/register", json=registration())
 
     assert response.status_code == 503
     assert "prepare_app_assets" in response.json()["detail"]
@@ -284,20 +257,20 @@ def test_a_recommendation_can_be_read_back(client):
 @pytest.mark.parametrize(
     ("override", "expected_field"),
     [
-        ({"service": {"field": "astrophysics"}}, "service.field"),
-        ({"service": {"max_mentees": 0}}, "service.max_mentees"),
-        ({"service": {"max_mentees": 17}}, "service.max_mentees"),
-        ({"service": {"max_mentees": 99}}, "service.max_mentees"),
-        ({"service": {"min_commitment": 4}}, "service.min_commitment"),
-        ({"service": {"skills": ["juggling"]}}, "service.skills"),
-        ({"years_mentoring_band": "2_to_3"}, "years_mentoring_band"),
-        ({"services_planned": 9}, "services_planned"),
+        ({"field": "astrophysics"}, "field"),
+        ({"max_mentees": 0}, "max_mentees"),
+        ({"max_mentees": 17}, "max_mentees"),
+        ({"max_mentees": 99}, "max_mentees"),
+        ({"min_commitment": 4}, "min_commitment"),
+        ({"skills": ["juggling"]}, "skills"),
+        ({"years_experience": 200}, "years_experience"),
         ({"education_level": "wizardry"}, "education_level"),
         ({"email": "not-an-email"}, "email"),
+        ({"password": "short"}, "password"),
     ],
 )
 def test_an_invalid_answer_is_named_and_explained(client, override, expected_field):
-    response = client.post("/mentors", json=registration(**override))
+    response = client.post("/auth/register", json=registration(**override))
 
     assert response.status_code == 422
     body = response.json()
@@ -309,19 +282,19 @@ def test_an_invalid_answer_is_named_and_explained(client, override, expected_fie
 
 def test_a_missing_answer_is_reported_as_required(client):
     payload = registration()
-    del payload["years_mentoring_band"]
+    del payload["field"]
 
-    body = client.post("/mentors", json=payload).json()
+    body = client.post("/auth/register", json=payload).json()
 
     errors = {error["field"]: error["message"] for error in body["errors"]}
-    assert errors["years_mentoring_band"] == "This answer is required."
+    assert errors["field"] == "This answer is required."
 
 
 def test_an_unknown_field_is_refused_rather_than_ignored(client):
     payload = registration()
     payload["hourly_rate"] = 200
 
-    response = client.post("/mentors", json=payload)
+    response = client.post("/auth/register", json=payload)
 
     assert response.status_code == 422
     assert "hourly_rate" in {error["field"] for error in response.json()["errors"]}
@@ -336,13 +309,11 @@ def test_a_group_size_outside_the_range_is_explained_in_mentor_language(
     in the words the form uses, because the group size is now the only
     question about the shape of a session.
     """
-    response = client.post(
-        "/mentors", json=registration(service={"max_mentees": mentees})
-    )
+    response = client.post("/auth/register", json=registration(max_mentees=mentees))
 
     assert response.status_code == 422
     errors = {error["field"]: error["message"] for error in response.json()["errors"]}
-    message = errors["service.max_mentees"].lower()
+    message = errors["max_mentees"].lower()
     assert "mentees" in message
     assert "1" in message and "8" in message
     for leaked in ("accommodates", "room_type", "guest", "night"):
@@ -355,18 +326,16 @@ def test_a_session_format_sent_anyway_is_refused_rather_than_ignored(client):
     priced on something it did not send.
     """
     payload = registration()
-    payload["service"]["service_type"] = "one_to_one"
+    payload["service_type"] = "one_to_one"
 
-    response = client.post("/mentors", json=payload)
+    response = client.post("/auth/register", json=payload)
 
     assert response.status_code == 422
-    assert "service.service_type" in {
-        error["field"] for error in response.json()["errors"]
-    }
+    assert "service_type" in {error["field"] for error in response.json()["errors"]}
 
 
 def test_an_error_message_is_written_for_the_mentor(client):
-    response = client.post("/mentors", json=registration(service={"max_mentees": 99}))
+    response = client.post("/auth/register", json=registration(max_mentees=99))
 
     messages = " ".join(error["message"] for error in response.json()["errors"])
     assert "mentees" in messages.lower()
@@ -376,7 +345,7 @@ def test_an_error_message_is_written_for_the_mentor(client):
 def test_every_error_body_has_the_same_shape(client):
     """One client path handles all of them, so they all look alike."""
     bodies = [
-        client.post("/mentors", json={}).json(),
+        client.post("/auth/register", json={}).json(),
         client.get("/mentors/1").json(),
         client.get("/mentors/999", headers=headers(999)).json(),
     ]
@@ -445,19 +414,24 @@ def test_a_mentor_scoped_endpoint_needs_an_identity(client, path):
     response = client.get(path)
 
     assert response.status_code == 401
-    assert MENTOR_ID_HEADER in response.json()["detail"]
+    assert "sign in" in response.json()["detail"].lower()
 
 
-def test_a_non_numeric_identity_is_refused(client):
-    response = client.get("/mentors/1", headers={MENTOR_ID_HEADER: "someone-else"})
+def test_a_token_that_proves_nothing_is_refused(client):
+    """
+    Not a token at all, in the header meant to carry one. The answer is the
+    same 401 as sending nothing, because the mentor's next action is the same
+    and naming the difference would let a caller work through the cases.
+    """
+    response = client.get("/mentors/1", headers={"Authorization": "Bearer nonsense"})
 
     assert response.status_code == 401
-    assert "whole number" in response.json()["detail"]
+    assert "sign in" in response.json()["detail"].lower()
 
 
 def test_registration_needs_no_identity(client):
     """It is the request that creates one."""
-    assert client.post("/mentors", json=registration()).status_code == 201
+    assert client.post("/auth/register", json=registration()).status_code == 201
 
 
 # ---------------------------------------------------------------------------
@@ -479,8 +453,8 @@ def test_the_stored_snapshot_holds_what_the_model_was_given(client, db_session):
 
 def test_the_price_moves_with_the_group_size_through_the_api(client):
     """The same directional check as the prediction tests, over HTTP."""
-    one = register(client, service={"max_mentees": 1})
-    eight = register(client, email="other@example.com", service={"max_mentees": 8})
+    one = register(client, max_mentees=1)
+    eight = register(client, email="other@example.com", max_mentees=8)
 
     assert (
         eight["recommendation"]["recommended_price"]
@@ -499,7 +473,7 @@ def test_the_service_carries_the_label_its_group_size_implies(
     The label is derived and returned, so the frontend never has to decide
     what to call a session and cannot disagree with the stored record.
     """
-    body = register(client, service={"max_mentees": mentees})
+    body = register(client, max_mentees=mentees)
 
     assert body["service"]["session_label"] == expected
     assert "service_type" not in body["service"]
@@ -510,7 +484,7 @@ def test_the_price_comes_with_a_per_mentee_figure(client):
     A session total alone does not tell a mentor whether a group is worth
     running, so the response divides it by the seats as well.
     """
-    recommendation = register(client, service={"max_mentees": 4})["recommendation"]
+    recommendation = register(client, max_mentees=4)["recommendation"]
 
     assert recommendation["price_per_mentee"] == round(
         recommendation["recommended_price"] / 4
@@ -524,7 +498,7 @@ def test_the_price_comes_with_a_per_mentee_figure(client):
 
 
 def test_a_one_to_one_price_is_the_same_per_mentee_as_per_session(client):
-    recommendation = register(client, service={"max_mentees": 1})["recommendation"]
+    recommendation = register(client, max_mentees=1)["recommendation"]
 
     assert recommendation["price_per_mentee"] == recommendation["recommended_price"]
     assert recommendation["price_per_mentee_low"] == recommendation["price_low"]
@@ -536,7 +510,7 @@ def test_the_per_mentee_figures_survive_a_read_back(client):
     They are divided out of the stored session prices rather than stored, so
     reading a price back has to produce the same six numbers.
     """
-    body = register(client, service={"max_mentees": 8})
+    body = register(client, max_mentees=8)
     mentor_id = body["mentor"]["id"]
     recommendation_id = body["recommendation"]["id"]
 
@@ -547,15 +521,19 @@ def test_the_per_mentee_figures_survive_a_read_back(client):
     assert read_back == body["recommendation"]
 
 
-@pytest.mark.parametrize("band", ["under_1", "1_to_2", "6_to_10", "over_10"])
-def test_the_experience_band_does_not_change_the_price(client, band):
+@pytest.mark.parametrize(
+    ("years", "band"),
+    [(0, "under_1"), (2, "1_to_2"), (7, "6_to_10"), (30, "over_10")],
+)
+def test_the_years_of_experience_do_not_change_the_price(client, years, band):
     """
-    Change 2, over HTTP. The band is stored and returned on the mentor's
-    record, and the price is the same whatever it says.
+    Change 2, over HTTP. The number is stored, the band it falls in is shown
+    on the mentor's record, and the price is the same whatever either says.
     """
-    baseline = register(client, years_mentoring_band="3_to_5")
-    other = register(client, email=f"{band}@example.com", years_mentoring_band=band)
+    baseline = register(client, years_experience=3)
+    other = register(client, email=f"y{years}@example.com", years_experience=years)
 
+    assert other["mentor"]["years_experience"] == years
     assert other["mentor"]["years_mentoring_band"] == band
     assert (
         other["recommendation"]["recommended_price"]
@@ -567,6 +545,17 @@ def test_the_experience_band_does_not_change_the_price(client, band):
     )
 
 
+def test_a_mentor_who_says_nothing_about_their_experience_has_no_band(client):
+    """Answering is optional, and the band is derived rather than asked."""
+    payload = registration()
+    del payload["years_experience"]
+
+    mentor = client.post("/auth/register", json=payload).json()["mentor"]
+
+    assert mentor["years_experience"] is None
+    assert mentor["years_mentoring_band"] is None
+
+
 def test_the_api_prices_a_new_mentor_on_the_new_mentor_tenure(client, pricing):
     """
     The constant, checked where it matters: the price the API returns is the
@@ -574,35 +563,11 @@ def test_the_api_prices_a_new_mentor_on_the_new_mentor_tenure(client, pricing):
     band instead would come back as a different number.
     """
     body = register(client)
-    expected = pricing.predict(
-        mapping.to_model_inputs(
-            field=REGISTRATION["service"]["field"],
-            max_mentees=REGISTRATION["service"]["max_mentees"],
-            min_commitment=REGISTRATION["service"]["min_commitment"],
-            skills=REGISTRATION["service"]["skills"],
-            profile_verified=REGISTRATION["service"]["profile_verified"],
-            services_planned=REGISTRATION["services_planned"],
-            services_count=1,
-        )
-    )
+    expected = pricing.predict(registered_model_inputs())
 
     assert mapping.NEW_MENTOR_TENURE_YEARS == 0.5
     assert body["recommendation"]["recommended_price"] == expected.recommended_price
     assert body["recommendation"]["price_per_mentee"] == expected.price_per_mentee
-
-
-def test_a_mentor_planning_four_services_is_priced_differently(client):
-    """
-    The registration question about planned services has to reach the model,
-    or asking it is pointless.
-    """
-    one = register(client, services_planned=1)
-    four = register(client, email="other@example.com", services_planned=4)
-
-    assert (
-        four["recommendation"]["recommended_price"]
-        != one["recommendation"]["recommended_price"]
-    )
 
 
 def test_the_recommendation_names_a_model_the_mapping_knows_about(client):
@@ -714,15 +679,7 @@ def test_the_full_price_is_the_one_the_prediction_service_gives(
     ).json()
 
     expected = pricing.predict(
-        mapping.to_model_inputs(
-            field=REGISTRATION["service"]["field"],
-            max_mentees=REGISTRATION["service"]["max_mentees"],
-            min_commitment=REGISTRATION["service"]["min_commitment"],
-            skills=REGISTRATION["service"]["skills"],
-            profile_verified=REGISTRATION["service"]["profile_verified"],
-            services_planned=REGISTRATION["services_planned"],
-            services_count=1,
-        ),
+        registered_model_inputs(),
         mapping.history_to_model_inputs(SYNTHETIC_HISTORY),
     )
 
@@ -875,7 +832,6 @@ SECOND_SERVICE = {
     "max_mentees": 4,
     "min_commitment": 2,
     "skills": ["portfolio_review", "career_planning"],
-    "profile_verified": True,
 }
 
 
@@ -912,11 +868,12 @@ def test_a_second_service_appears_on_the_mentors_record(client):
 
 def test_adding_a_service_moves_the_service_count_the_model_is_given(client):
     """
-    A mentor who registered planning one service and then published a second
-    is priced as someone with a two-service offering, so the first service's
-    price changes when it is asked for again.
+    A mentor who publishes a second service is priced as someone with a
+    two-service offering, so the first service's price changes when it is
+    asked for again. The count is what they have published, which is the only
+    thing about it the platform can see.
     """
-    body = register(client, services_planned=1)
+    body = register(client)
     mentor_id = body["mentor"]["id"]
     first_service = body["service"]["id"]
     before = body["recommendation"]["recommended_price"]
@@ -930,7 +887,7 @@ def test_adding_a_service_moves_the_service_count_the_model_is_given(client):
         f"/services/{first_service}/recommendations", headers=headers(mentor_id)
     ).json()
 
-    assert mapping.effective_services(2, 1) == 2
+    assert mapping.effective_services(2) == 2
     assert after["recommended_price"] != before
 
 
@@ -1009,7 +966,7 @@ def test_the_demo_list_describes_each_mentor_in_mentor_language(client, api_sess
 
     entry = client.get("/mentors/demo").json()[0]
 
-    assert entry["display_name"] == REGISTRATION["full_name"]
+    assert entry["display_name"] == REGISTRATION["name"]
     assert entry["headline"] == REGISTRATION["headline"]
     assert entry["field_label"] == "Technology and software"
     assert entry["session_label"] == "One to one"
@@ -1041,3 +998,103 @@ def test_the_demo_list_works_without_models(modelless_client):
     it and show the demo who is there.
     """
     assert modelless_client.get("/mentors/demo").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# What a price says about the session it is for
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("mentees", "label"), [(1, "one_to_one"), (2, "group"), (8, "group")]
+)
+def test_a_price_says_how_many_mentees_it_is_for(client, mentees, label):
+    """
+    A price card that showed a number alone would leave the mentor to
+    remember which of their services it was for.
+    """
+    recommendation = register(client, max_mentees=mentees)["recommendation"]
+
+    assert recommendation["max_mentees"] == mentees
+    assert recommendation["session_label"] == label
+
+
+def test_a_price_keeps_the_session_it_was_given_for(client):
+    """
+    Read from the row's own stored inputs rather than from the service as it
+    stands now, so a mentor who changes the number of seats afterwards does
+    not change what an old price says it was a price for.
+    """
+    body = register(client, max_mentees=4)
+    mentor_id = body["mentor"]["id"]
+    recommendation_id = body["recommendation"]["id"]
+
+    read_back = client.get(
+        f"/recommendations/{recommendation_id}", headers=headers(mentor_id)
+    ).json()
+
+    assert read_back["max_mentees"] == 4
+    assert read_back["session_label"] == "group"
+
+
+# ---------------------------------------------------------------------------
+# One service on its own
+# ---------------------------------------------------------------------------
+def test_a_mentor_can_read_one_of_their_services(client):
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    service_id = body["service"]["id"]
+
+    response = client.get(f"/services/{service_id}", headers=headers(mentor_id))
+
+    assert response.status_code == 200
+    assert response.json() == body["service"]
+
+
+def test_reading_a_service_needs_an_identity(client):
+    service_id = register(client)["service"]["id"]
+
+    assert client.get(f"/services/{service_id}").status_code == 401
+
+
+def test_a_service_nobody_has_is_not_found(client):
+    mentor_id = register(client)["mentor"]["id"]
+
+    assert client.get("/services/99999", headers=headers(mentor_id)).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# A price, read back with what came of it
+# ---------------------------------------------------------------------------
+def test_an_unanswered_price_reads_back_with_no_decision(client):
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+
+    read_back = client.get(
+        f"/recommendations/{body['recommendation']['id']}", headers=headers(mentor_id)
+    ).json()
+
+    assert read_back["status"] == "pending"
+    assert read_back["decision"] is None
+
+
+def test_an_answered_price_reads_back_with_the_answer(client):
+    """
+    So a frontend showing one price does not have to ask a second time to
+    find out whether it still stands.
+    """
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    recommendation_id = body["recommendation"]["id"]
+    client.post(
+        f"/recommendations/{recommendation_id}/decision",
+        json={"action": "accepted"},
+        headers=headers(mentor_id),
+    )
+
+    read_back = client.get(
+        f"/recommendations/{recommendation_id}", headers=headers(mentor_id)
+    ).json()
+
+    assert read_back["status"] == "accepted"
+    assert read_back["decision"]["action"] == "accepted"
+    assert read_back["decision"]["final_price"] == read_back["recommended_price"]
+    assert read_back["decision"]["recommendation_id"] == recommendation_id

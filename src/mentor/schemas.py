@@ -22,7 +22,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.db.mentor_models import DECISION_ACTIONS
-from src.mentor import comparables, mapping
+from src.mentor import comparables, mapping, security
 
 # Deliberately permissive: enough to catch a missing "@" or a typed sentence,
 # without rejecting the legitimate addresses that a stricter pattern tends to.
@@ -48,6 +48,12 @@ class ServiceInput(StrictModel):
     There is no session format question. How many mentees can join is the
     only thing asked about the shape of a session, and what the session is
     called follows from it: see ``session_label_rule`` on /meta/options.
+
+    There is no verification flag either. Whether a mentor has been checked is
+    something the platform says about them rather than something they tell it,
+    so a service takes that from the mentor's account and not from this body.
+    It is one of the eight things a price is worked out from, which is exactly
+    why a mentor cannot set it.
     """
 
     field: str = Field(
@@ -69,10 +75,6 @@ class ServiceInput(StrictModel):
         default_factory=list,
         description="Skill ids the mentor offers, from /meta/options.",
         examples=[["cv_review", "interview_preparation"]],
-    )
-    profile_verified: bool = Field(
-        default=False,
-        description="Whether the mentor has completed identity verification.",
     )
 
     @field_validator("field")
@@ -102,59 +104,38 @@ class ServiceInput(StrictModel):
         return mapping.validate_skills(value)
 
 
-class MentorRegistration(StrictModel):
-    """Everything asked at registration, including the mentor's first service."""
+class ProfileFields(StrictModel):
+    """
+    The optional things a mentor says about themselves.
 
-    full_name: str = Field(
-        min_length=NAME_MIN, max_length=NAME_MAX, examples=["A. Mentor"]
-    )
-    email: str = Field(max_length=EMAIL_MAX, examples=["mentor@example.com"])
-    years_mentoring_band: str = Field(
-        description=(
-            "How long the mentor has been mentoring, from /meta/options. "
-            "Shown on the mentor's profile; it does not affect the price."
-        ),
-        examples=["3_to_5"],
-    )
-    services_planned: int = Field(
-        description=(
-            f"How many services the mentor plans to offer. "
-            f"{mapping.SERVICES_CAP} means {mapping.SERVICES_CAP} or more."
-        ),
-        examples=[1],
-    )
-    service: ServiceInput = Field(description="The mentor's first service.")
+    Every field here is profile only. None of them reaches a model: the
+    training data has no equivalent of a qualification or a number of years
+    mentoring, so routing one into a column would be inventing a
+    relationship rather than using one. They are stored, shown on the
+    mentor's public profile, and that is all they do.
+    """
 
-    headline: str | None = Field(
+    years_experience: int | None = Field(
         default=None,
-        max_length=HEADLINE_MAX,
-        examples=["Helping graduate engineers find their first role"],
+        description=(
+            f"How many years the mentor has been mentoring, "
+            f"{mapping.YEARS_EXPERIENCE_MIN} to "
+            f"{mapping.YEARS_EXPERIENCE_MAX}. Shown on their profile; it does "
+            f"not affect the price."
+        ),
+        examples=[7],
     )
-    bio: str | None = Field(default=None, max_length=TEXT_MAX)
-    # Profile only. Collected for the mentor's public page; the model has no
-    # equivalent input, so none of the three reaches it.
     education_level: str | None = Field(
         default=None, description="Highest level of education, from /meta/options."
     )
-    experience_summary: str | None = Field(default=None, max_length=TEXT_MAX)
     credentials: str | None = Field(default=None, max_length=TEXT_MAX)
 
-    @field_validator("email")
+    @field_validator("years_experience", mode="before")
     @classmethod
-    def _check_email(cls, value: str) -> str:
-        if not EMAIL_PATTERN.match(value):
-            raise ValueError("Enter an email address the mentor can be reached at.")
-        return value.lower()
-
-    @field_validator("years_mentoring_band")
-    @classmethod
-    def _check_band(cls, value: str) -> str:
-        return mapping.validate_years_mentoring(value)
-
-    @field_validator("services_planned", mode="before")
-    @classmethod
-    def _check_services_planned(cls, value: object) -> int:
-        return mapping.validate_services_planned(value)
+    def _check_years(cls, value: object) -> int | None:
+        if value is None:
+            return None
+        return mapping.validate_years_experience(value)
 
     @field_validator("education_level")
     @classmethod
@@ -162,6 +143,178 @@ class MentorRegistration(StrictModel):
         if value is None:
             return None
         return mapping.validate_education_level(value)
+
+
+class MentorRegistration(ProfileFields):
+    """
+    Everything the single-page registration form sends, in one body.
+
+    One call creates the account, the profile and the first service, because
+    the form is one page and the mentor is waiting for a price at the end of
+    it. Splitting it would leave a mentor who abandoned the second request
+    with an account and nothing to price.
+
+    What it no longer asks is worth naming. There is no question about how
+    many services the mentor plans to offer: it was a guess about the future
+    that moved their price today. There is no verification flag either; a
+    mentor cannot tell the platform that the platform has checked them, so
+    every new account starts unverified.
+    """
+
+    name: str = Field(
+        min_length=NAME_MIN,
+        max_length=NAME_MAX,
+        description="The name shown on the mentor's profile.",
+        examples=["A. Mentor"],
+    )
+    email: str = Field(max_length=EMAIL_MAX, examples=["mentor@example.com"])
+    password: str = Field(
+        description=(
+            f"Between {security.PASSWORD_MIN_LENGTH} and "
+            f"{security.PASSWORD_MAX_LENGTH} characters."
+        ),
+        examples=["a-long-enough-password"],
+    )
+    field: str = Field(
+        description="The field the mentor works in, from /meta/options.",
+        examples=["technology_software"],
+    )
+    max_mentees: int = Field(
+        description=(
+            f"How many mentees can join one session, "
+            f"{mapping.MAX_MENTEES_MIN} to {mapping.MAX_MENTEES_MAX}."
+        ),
+        examples=[1],
+    )
+    skills: list[str] = Field(
+        default_factory=list,
+        description="Skill ids the mentor offers, from /meta/options.",
+        examples=[["cv_review", "interview_preparation"]],
+    )
+    min_commitment: int = Field(
+        default=mapping.MIN_COMMITMENT_DEFAULT,
+        description=(
+            "Smallest number of sessions a mentee can book. Optional: one "
+            "session when the form does not ask."
+        ),
+        examples=[1],
+    )
+    headline: str | None = Field(
+        default=None,
+        max_length=HEADLINE_MAX,
+        examples=["Helping graduate engineers find their first role"],
+    )
+    bio: str | None = Field(default=None, max_length=TEXT_MAX)
+    experience_summary: str | None = Field(default=None, max_length=TEXT_MAX)
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        normalised = security.normalise_email(value)
+        if not EMAIL_PATTERN.match(normalised):
+            raise ValueError("Enter an email address the mentor can be reached at.")
+        return normalised
+
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        return security.validate_password(value)
+
+    @field_validator("field")
+    @classmethod
+    def _check_field(cls, value: str) -> str:
+        return mapping.validate_field(value)
+
+    # "before" mode, for the reason given on ServiceInput.max_mentees: in
+    # Python True is an int equal to 1, so a checkbox posted into a number box
+    # would otherwise be stored as a group of one.
+    @field_validator("max_mentees", mode="before")
+    @classmethod
+    def _check_max_mentees(cls, value: object) -> int:
+        return mapping.validate_max_mentees(value)
+
+    @field_validator("min_commitment", mode="before")
+    @classmethod
+    def _check_min_commitment(cls, value: object) -> int:
+        return mapping.validate_min_commitment(value)
+
+    @field_validator("skills")
+    @classmethod
+    def _check_skills(cls, value: list[str]) -> list[str]:
+        return mapping.validate_skills(value)
+
+
+class MentorLogin(StrictModel):
+    """An email address and a password, and nothing else."""
+
+    email: str = Field(max_length=EMAIL_MAX, examples=["mentor@example.com"])
+    password: str = Field(examples=["a-long-enough-password"])
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        return security.normalise_email(value)
+
+
+class MentorUpdate(ProfileFields):
+    """
+    The parts of their own record a mentor may change.
+
+    Their name and the three optional profile fields. Nothing here reaches a
+    model, and nothing here is a thing the platform says about the mentor: a
+    mentor cannot edit their own verification, their email address or anything
+    about a service, each of which has its own reason to be settled elsewhere.
+
+    Every field is optional, and a field that was not sent is left alone
+    rather than cleared. Sending one as null does clear it, which is how a
+    mentor removes something they would rather not show.
+    """
+
+    name: str | None = Field(
+        default=None, min_length=NAME_MIN, max_length=NAME_MAX, examples=["A. Mentor"]
+    )
+
+
+class PreviewInput(StrictModel):
+    """
+    The three answers a live price preview needs, and no account.
+
+    Exactly the answers the registration form asks that affect a price, with
+    the same validation, so the number shown beside a half-filled form is the
+    number the form will produce when it is submitted.
+    """
+
+    field: str = Field(
+        description="The field the mentor works in, from /meta/options.",
+        examples=["technology_software"],
+    )
+    max_mentees: int = Field(
+        description=(
+            f"How many mentees can join one session, "
+            f"{mapping.MAX_MENTEES_MIN} to {mapping.MAX_MENTEES_MAX}."
+        ),
+        examples=[1],
+    )
+    skills: list[str] = Field(
+        default_factory=list,
+        description="Skill ids the mentor offers, from /meta/options.",
+        examples=[["cv_review", "interview_preparation"]],
+    )
+
+    @field_validator("field")
+    @classmethod
+    def _check_field(cls, value: str) -> str:
+        return mapping.validate_field(value)
+
+    @field_validator("max_mentees", mode="before")
+    @classmethod
+    def _check_max_mentees(cls, value: object) -> int:
+        return mapping.validate_max_mentees(value)
+
+    @field_validator("skills")
+    @classmethod
+    def _check_skills(cls, value: list[str]) -> list[str]:
+        return mapping.validate_skills(value)
 
 
 class ServiceOut(BaseModel):
@@ -258,8 +411,27 @@ class MentorOut(BaseModel):
     education_level: str | None
     experience_summary: str | None
     credentials: str | None
-    years_mentoring_band: str
-    services_planned: int
+    years_experience: int | None = Field(
+        default=None,
+        description=(
+            "How many years the mentor has been mentoring, or null if they "
+            "have not said. Profile only: it does not affect the price."
+        ),
+    )
+    years_mentoring_band: str | None = Field(
+        default=None,
+        description=(
+            "The band years_experience falls in, from /meta/options, or null "
+            "if the mentor has not said how long they have been mentoring."
+        ),
+    )
+    verified: bool = Field(
+        default=False,
+        description=(
+            "True once the platform has checked who this mentor is. False for "
+            "every new account: nothing a mentor sends can set it."
+        ),
+    )
     is_demo: bool = Field(
         default=False,
         description=(
@@ -273,6 +445,131 @@ class MentorOut(BaseModel):
         description="The mentor's track record, or null if they have none yet.",
     )
     created_at: datetime
+
+
+class MentorCardOut(BaseModel):
+    """
+    One mentor as the public directory shows them.
+
+    Deliberately short, and the list is deliberately exhaustive: this is the
+    one response in the API that is served to anybody at all, so what it
+    carries was chosen field by field rather than trimmed from a record. No
+    address, no password hash, no demonstration flag, no source record, and
+    none of the figures a model reads.
+
+    ``price`` is what the mentor charges today, which is null until they have
+    settled on one. A mentor who has only been advised a price has not set it,
+    and showing advice as though it were their price would put a number on
+    their card that they never chose.
+    """
+
+    id: int
+    display_name: str
+    field_label: str = Field(examples=["Technology and software"])
+    service_name: str = Field(
+        description="What the service is called, derived from the field and "
+        "the group size.",
+        examples=["Technology and software: one-to-one mentoring"],
+    )
+    price: int | None = Field(
+        default=None,
+        description=(
+            f"What the mentor charges for one session, in whole "
+            f"{mapping.CURRENCY}, or null if they have not set a price yet."
+        ),
+    )
+    max_mentees: int
+    session_label: str = Field(examples=["one_to_one"])
+    verified: bool = Field(
+        description="True once the platform has checked who this mentor is."
+    )
+    review_count: int = Field(
+        description=(
+            "How many reviews the mentor has, or zero for a mentor with no "
+            "record on the platform yet."
+        )
+    )
+
+
+class MentorDirectoryOut(BaseModel):
+    """
+    A page of the public directory, and how many mentors there are in all.
+
+    ``total`` counts every mentor the filters match rather than the ones on
+    this page, so a frontend can say how many there are without asking for
+    all of them.
+    """
+
+    total: int
+    limit: int
+    offset: int
+    items: list[MentorCardOut]
+
+
+class SkillOut(BaseModel):
+    """One skill, with the label a mentee reads for it."""
+
+    id: str = Field(examples=["cv_review"])
+    label: str = Field(examples=["CV review"])
+
+
+class PublicMentorOut(MentorCardOut):
+    """
+    One mentor's public profile: their card, their skills, what they told us.
+
+    The three optional fields are profile only and are shown exactly as the
+    mentor entered them, or null where they chose not to answer. None of them
+    reaches a model, which is why a mentor can fill them in or clear them
+    without their price moving.
+    """
+
+    skills: list[SkillOut] = Field(default_factory=list)
+    years_experience: int | None = Field(
+        default=None,
+        description="How many years the mentor has been mentoring, if they said.",
+    )
+    years_mentoring_band: str | None = Field(
+        default=None, description="The band those years fall in, from /meta/options."
+    )
+    education_level: str | None = Field(
+        default=None, description="The id of their education level, if they gave one."
+    )
+    education_label: str | None = Field(
+        default=None, description="The label a mentee reads for that level."
+    )
+    credentials: str | None = None
+
+
+class PreviewOut(BaseModel):
+    """
+    A price for answers nobody has registered yet.
+
+    The same four numbers the registration form will produce, so a mentor
+    filling it in watches the figure they are about to be given rather than
+    waiting to find out. Nothing is stored: there is no mentor to store it
+    against, and a preview is not advice the mentor has been offered.
+    """
+
+    session_price: int = Field(
+        description="The advised price for one session, in whole currency units."
+    )
+    per_person_price: int = Field(
+        description=(
+            "That price divided by the number of mentees who can join, which "
+            "is what one mentee pays. Equal to session_price for a session of "
+            "one."
+        )
+    )
+    range_low: int = Field(description="Low end of the range around the advice.")
+    range_high: int = Field(description="High end of the range around the advice.")
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    low_confidence: bool = Field(
+        default=True,
+        description=(
+            "Always true here. A preview is worked out from a part-filled "
+            "form, with no record of completed sessions to draw on."
+        ),
+    )
 
 
 class DemoMentorOut(BaseModel):
@@ -297,6 +594,25 @@ class DemoMentorOut(BaseModel):
     )
 
 
+class DecisionOut(BaseModel):
+    """One answer a mentor gave, as it is read back."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    recommendation_id: int
+    action: str = Field(examples=["accepted"])
+    final_price: int | None = Field(
+        default=None,
+        description=(
+            "The price the mentor settled on, or null for a rejection that "
+            "named no price of its own."
+        ),
+    )
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    decided_at: datetime
+
+
 class RecommendationOut(BaseModel):
     """One advisory price, as the mentor is shown it."""
 
@@ -319,6 +635,20 @@ class RecommendationOut(BaseModel):
     price_per_mentee_low: int = Field(description="Low end of the range, per mentee.")
     price_per_mentee_high: int = Field(description="High end of the range, per mentee.")
     currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    # Both read from the row's own input snapshot rather than from the service
+    # as it stands now, for the same reason the per-mentee figures are: a
+    # mentor who changes the number of seats afterwards must not change what
+    # an old price says it was a price for.
+    max_mentees: int = Field(
+        description="How many mentees the session this price is for can hold."
+    )
+    session_label: str = Field(
+        description=(
+            'What that size of session is called: "one_to_one" or "group". '
+            "The labels to show are in /meta/options."
+        ),
+        examples=["one_to_one"],
+    )
     model_used: str = Field(description='Either "core" or "full".')
     low_confidence: bool = Field(
         description=(
@@ -356,10 +686,50 @@ class RecommendationOut(BaseModel):
         examples=["within"],
     )
     generated_at: datetime
+    decision: DecisionOut | None = Field(
+        default=None,
+        description=(
+            "What the mentor decided about this price, where the endpoint "
+            "reports it. Null on a price nobody has answered, and null on the "
+            "endpoints that report the decision beside the price instead."
+        ),
+    )
 
 
-class RegistrationOut(BaseModel):
-    """What registration returns: the mentor, the service and the first price."""
+class TokenOut(BaseModel):
+    """
+    An access token, and how long it is good for.
+
+    ``token_type`` is always "bearer" and is reported rather than assumed, so
+    a client can build the header from the response instead of from a
+    convention it remembers. There is no refresh token: a token lasts seven
+    days and signing in again is how a mentor gets another one.
+    """
+
+    access_token: str = Field(
+        description="Send as the Authorization header: `Bearer <token>`."
+    )
+    token_type: str = Field(default=security.TOKEN_TYPE, examples=[security.TOKEN_TYPE])
+    expires_in: int = Field(
+        description="Seconds until the token stops being accepted.",
+        examples=[security.token_lifetime_seconds()],
+    )
+
+
+class LoginOut(TokenOut):
+    """What signing in returns: a token and the mentor it belongs to."""
+
+    mentor: MentorOut
+
+
+class RegistrationOut(TokenOut):
+    """
+    What registration returns: a signed-in mentor, their service, its price.
+
+    The token is included so the frontend does not have to sign in again
+    immediately after registering, and the price is included because the
+    mentor filled in the form to get it.
+    """
 
     mentor: MentorOut
     service: ServiceOut
@@ -434,8 +804,9 @@ class OptionsOut(BaseModel):
     max_mentees: dict[str, int]
     session_label_rule: dict[str, dict[str, Any]]
     min_commitment: list[dict[str, Any]]
+    min_commitment_default: int
     years_mentoring_bands: list[dict[str, Any]]
-    services_planned: list[dict[str, Any]]
+    years_experience: dict[str, int]
     education_levels: list[dict[str, Any]]
 
 
@@ -586,25 +957,6 @@ class DecisionInput(StrictModel):
         return mapping.validate_final_price(value)
 
 
-class DecisionOut(BaseModel):
-    """One answer a mentor gave, as it is read back."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    recommendation_id: int
-    action: str = Field(examples=["accepted"])
-    final_price: int | None = Field(
-        default=None,
-        description=(
-            "The price the mentor settled on, or null for a rejection that "
-            "named no price of its own."
-        ),
-    )
-    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
-    decided_at: datetime
-
-
 class RecommendationHistoryOut(BaseModel):
     """
     One advisory price and what the mentor did about it.
@@ -739,11 +1091,118 @@ class DashboardTotalsOut(BaseModel):
     )
 
 
+class ActivityOut(BaseModel):
+    """
+    A mentor's own activity, month by month, as parallel arrays.
+
+    Four lists of the same length, one entry per month, oldest first. Parallel
+    arrays rather than a list of objects because every chart library takes
+    them that way, and because it makes the one thing that matters about this
+    response obvious: a month is one position in all four lists, so a gap in
+    one of them is a gap and not a shift.
+
+    **A null is not a zero.** ``booked_share_by_month`` and
+    ``price_by_month`` are null for a month the platform has no such
+    measurement for. A zero would say the mentor was booked for none of the
+    time they offered, or charged nothing, and both are claims the platform
+    cannot make. ``reviews_by_month`` is never null: a month inside the period
+    a mentor has been on the platform with no reviews in it had none.
+
+    **There is no rating over time.** The platform holds one rating per
+    mentor, as it stands now, with no record of what it was in any earlier
+    month, so a rating line would have to be invented.
+    """
+
+    has_history: bool = Field(
+        description=(
+            "False for a mentor with no activity recorded yet, which is every "
+            "mentor who has just registered. The four lists are then empty."
+        )
+    )
+    months: list[str] = Field(
+        default_factory=list,
+        description="Each month as its first day, oldest first.",
+        examples=[["2026-07-01", "2026-08-01"]],
+    )
+    reviews_by_month: list[int] = Field(default_factory=list)
+    booked_share_by_month: list[float | None] = Field(
+        default_factory=list,
+        description=(
+            "The share of the time the mentor offered that was booked, from 0 "
+            "to 1, or null for a month with no record of it."
+        ),
+    )
+    price_by_month: list[int | None] = Field(
+        default_factory=list,
+        description=(
+            f"What the mentor charged that month, in whole {mapping.CURRENCY}, "
+            f"or null for a month with no record of it."
+        ),
+    )
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    note: str = Field(
+        description="One plain sentence saying what the period shows.",
+        examples=["You have 23 reviews over the last 12 months."],
+    )
+
+
+class DashboardHeadlineOut(BaseModel):
+    """
+    The one line at the top of the mentor's page, and the figures behind it.
+
+    Built for the mentor's main service, which is the first one they
+    published. A page that opened with eight numbers and no sentence would
+    leave the mentor to work out what they mean, and the sentence is the thing
+    they came for: am I charging roughly what other people like me charge.
+
+    ``sentence`` is written on the server, in plain words, so that the one
+    statement the page makes about a mentor's price cannot be assembled
+    differently by two different frontends. It carries no percentages and no
+    model terms.
+    """
+
+    your_price: int | None = Field(
+        default=None,
+        description=(
+            f"What the mentor charges for that service today, in whole "
+            f"{mapping.CURRENCY}, or null if they have not set a price."
+        ),
+    )
+    similar_typical: int | None = Field(
+        default=None,
+        description=(
+            "What a typical comparable mentor charges: the median of the "
+            "mentors this service is compared against. Null when there are "
+            "none, or when this server has no comparison table."
+        ),
+    )
+    position_vs_range: str | None = Field(
+        default=None,
+        description=(
+            "Where the mentor's own price sits among comparable mentors: "
+            '"below", "within" or "above" the range a typical one charges, '
+            "which is the middle half of them. Null when either price is "
+            "missing."
+        ),
+        examples=["within"],
+    )
+    sentence: str = Field(
+        description="The same comparison in one plain sentence.",
+        examples=[
+            "You charge about the same as other one-to-one mentors in your field."
+        ],
+    )
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+
+
 class DashboardOut(BaseModel):
     """A mentor's own page: one block per service, plus their own totals."""
 
     mentor_id: int
     display_name: str
+    headline: DashboardHeadlineOut = Field(
+        description="The one line the page opens with, about the main service."
+    )
     currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
     comparables_available: bool = Field(
         description=(
