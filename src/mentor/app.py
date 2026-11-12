@@ -56,6 +56,7 @@ from src.db.mentor_models import (
     Service,
 )
 from src.mentor import comparables as comparables_module
+from src.mentor import explanation as explanation_module
 from src.mentor import mapping, security
 from src.mentor.dependencies import get_current_mentor_id, unauthorized
 from src.mentor.prediction import (
@@ -85,6 +86,7 @@ from src.mentor.schemas import (
     DecisionOut,
     DemoMentorOut,
     ErrorOut,
+    ExplanationOut,
     HealthOut,
     HistorySummaryOut,
     LoginOut,
@@ -97,7 +99,10 @@ from src.mentor.schemas import (
     OptionsOut,
     PreviewInput,
     PreviewOut,
+    PriceComparisonOut,
+    PriceDifferenceOut,
     PriceDistributionOut,
+    PriceFactorOut,
     PriceHistogramOut,
     PublicMentorOut,
     RecommendationHistoryOut,
@@ -1552,6 +1557,83 @@ async def read_recommendation(
     """
     record = owned_recommendation(session, recommendation_id, current_mentor_id)
     return as_recommendation(record, record.service.current_price, with_decision=True)
+
+
+@app.get(
+    "/recommendations/{recommendation_id}/explanation",
+    tags=["pricing"],
+    response_model=ExplanationOut,
+    responses={401: ERROR_RESPONSE, 404: ERROR_RESPONSE, 503: ERROR_RESPONSE},
+    summary="Why this price was suggested",
+)
+async def read_explanation(
+    recommendation_id: int,
+    session: Session = Depends(get_session),
+    current_mentor_id: int = Depends(get_current_mentor_id),
+    pricing: PricingService = Depends(get_pricing),
+    table: comparables_module.ComparablesTable = Depends(get_comparables),
+) -> ExplanationOut:
+    """
+    One of the mentor's own prices, taken apart into the answers behind it.
+
+    A separate request rather than a larger recommendation response. The
+    price screen is useful before this arrives and stays useful if it never
+    does, and nothing already reading a recommendation has to be changed to
+    accommodate a block it does not want.
+
+    Scoped like every other read: through the service that owns the price,
+    so another mentor's recommendation is reported as missing rather than as
+    forbidden, and an unknown id the same way.
+
+    The account is built from the inputs stored with the price rather than
+    from the mentor's record as it stands now. A price explained by answers
+    the mentor has since changed would be an account of a different price.
+    """
+    record = owned_recommendation(session, recommendation_id, current_mentor_id)
+    mentor = session.get(Mentor, current_mentor_id)
+    if mentor is None:  # pragma: no cover - the token named a mentor
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
+        )
+
+    account = explanation_module.explain_price(
+        pricing=pricing,
+        inputs=dict(record.inputs_snapshot),
+        model_used=record.model_used,
+        suggested_price=int(record.recommended_price),
+    )
+    found = comparables_for(table, record.service, mentor)
+    comparison = explanation_module.compare_price(
+        found=found,
+        suggested_price=int(record.recommended_price),
+        inputs=dict(record.inputs_snapshot),
+        factors=account["factors"],
+    )
+
+    other = account["other_small_effects"]
+    return ExplanationOut(
+        recommendation_id=record.id,
+        service_id=record.service_id,
+        model_used=record.model_used,
+        low_confidence=bool(record.low_confidence),
+        currency=account["currency"],
+        baseline_price=account["baseline_price"],
+        baseline_sentence=account["baseline_sentence"],
+        suggested_price=account["suggested_price"],
+        factors=[PriceFactorOut(**row) for row in account["factors"]],
+        other_small_effects=PriceFactorOut(**other) if other else None,
+        combination_note=account["combination_note"],
+        limitation=account["limitation"],
+        profile_note=account["profile_note"],
+        comparison=PriceComparisonOut(
+            **{
+                **comparison,
+                "differences": [
+                    PriceDifferenceOut(**one) for one in comparison["differences"]
+                ],
+            }
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -304,9 +304,21 @@ SYNTHETIC_COMPARABLES: list[dict[str, object]] = [
 ]
 
 
+# What a mentor in the hand-built table offers, as opposed to what they
+# charge. One set of values for every row, because these tests are about
+# matching and summarising rather than about any one mentor's answers; a test
+# that needs a particular difference sets it on the row it is about.
+SYNTHETIC_PROFILE: dict[str, int] = {
+    "skills_covered": 10,
+    "profile_verified": 1,
+    "services_count": 2,
+    "min_commitment": 1,
+}
+
+
 def synthetic_comparables() -> ComparablesTable:
     """The hand-built table above, as the application reads it."""
-    rows = pd.DataFrame(SYNTHETIC_COMPARABLES)
+    rows = pd.DataFrame([{**SYNTHETIC_PROFILE, **row} for row in SYNTHETIC_COMPARABLES])
     rows["price_per_mentee"] = (rows["price"] / rows["max_mentees"]).round().astype(int)
     return ComparablesTable(rows)
 

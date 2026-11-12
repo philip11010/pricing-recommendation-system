@@ -9,8 +9,11 @@ read as the system telling them to narrow what they offer.
 The models do not provide that on their own. Both learned shapes for breadth
 of offering and for group size that dip in places, which is an artefact of the
 rows they were fitted on rather than a rule. So the prediction service reads a
-price off a monotone envelope over those two inputs, and this module is where
-the envelope is held to its claim.
+price off a corrected surface over those two inputs: a non-decreasing isotonic
+fit through the whole skill ladder, and the largest of those across every group
+size up to the one asked for. This module is where that correction is held to
+its claim, both that it rises and that it stays inside the scores it is fitted
+through.
 
 Two kinds of test here, and the pairing matters. The sweeps assert the
 property across the whole surface the form can produce, which is what makes it
@@ -247,22 +250,55 @@ def test_the_envelope_holds_the_price_up_through_that_fall(
     assert is_rising(prices), (model_used, profile, prices)
 
 
-def test_the_corrected_price_is_never_below_the_models_own(pricing):
+def test_the_corrected_price_is_never_outside_the_models_own(pricing):
     """
-    The envelope only ever holds a price up, never pushes one down.
+    The correction smooths the model's scores; it does not invent height.
 
-    Worth stating as a test because it is the bias the correction carries:
-    every price it changes, it raises. Anywhere these prices are reported,
-    that is the sentence that has to go with them.
+    This is the property a running maximum did not have, and the reason it
+    was replaced. A maximum over a noisy ladder ratchets: every dip raises
+    the answer and nothing ever lowers it again, so the correction becomes a
+    bias. An isotonic fit is a least squares curve through the same scores,
+    so its answer is held between the smallest and the largest of them.
+
+    Asserted against the whole set of rows the price is worked out from, not
+    only the ladder, because the group size rule still takes a maximum across
+    sizes and the answer may legitimately come from a smaller one.
     """
     for field in list(mapping.FIELDS)[:4]:
         for mentees in (1, 4, 8):
             for count in (1, 7, 15, 30):
                 row = answers(field, mentees, False, count)
-                raw = pricing.raw_prices_by_skill_count(row, CORE)[-1]
+                raw = pricing.raw_envelope_prices(row, CORE)
                 corrected = pricing.predict_many([row], CORE)[0].recommended_price
 
-                assert corrected >= int(round(raw)) - 1, (field, mentees, count)
+                assert int(round(min(raw))) <= corrected <= int(round(max(raw))), (
+                    field,
+                    mentees,
+                    count,
+                )
+
+
+def test_at_one_seat_the_price_sits_inside_the_skill_ladder(pricing):
+    """
+    The same claim with the group size rule taken out of the way.
+
+    At one seat there is nothing to take a maximum across, so the whole
+    answer is the isotonic fit and the ladder it is fitted through is the
+    only evidence there is. A price above the top of that ladder would mean
+    the correction had added height of its own.
+    """
+    for model_used in (CORE, FULL):
+        for field in list(mapping.FIELDS)[:4]:
+            for count in (0, 3, 12, 25, mapping.SKILL_COUNT):
+                row = answers(field, 1, False, count)
+                if model_used == FULL:
+                    row = {**row, **history()}
+                ladder = pricing.raw_envelope_prices(row, model_used)
+                corrected = pricing.predict_many([row], model_used)[0].recommended_price
+
+                assert (
+                    int(round(min(ladder))) <= corrected <= int(round(max(ladder)))
+                ), (model_used, field, count)
 
 
 def test_a_service_with_no_skills_is_still_priced(pricing):

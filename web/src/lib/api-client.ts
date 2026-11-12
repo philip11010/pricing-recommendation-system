@@ -19,6 +19,7 @@ import type {
   Dashboard,
   Decision,
   DecisionPayload,
+  Explanation,
   HealthResponse,
   LoginPayload,
   Mentor,
@@ -237,6 +238,19 @@ export const api = {
 
   recommendation(recommendationId: number, signal?: AbortSignal) {
     return request<Recommendation>(`/recommendations/${recommendationId}`, {
+      auth: true,
+      signal,
+    });
+  },
+
+  /**
+   * Why one price was suggested.
+   *
+   * A request of its own rather than part of the recommendation, so the
+   * price screen is useful before it arrives and stays useful if it fails.
+   */
+  explanation(recommendationId: number, signal?: AbortSignal) {
+    return request<Explanation>(`/recommendations/${recommendationId}/explanation`, {
       auth: true,
       signal,
     });

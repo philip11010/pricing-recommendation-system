@@ -48,10 +48,14 @@
      on the indigo end and failed on the blue end, and which end a line of
      the lead sat on depended on how wide the window was. White clears 4.5:1
      on every stop of every gradient here, so it is the one colour that does
-     not have to be argued about per width. The fine print is still tinted
-     and still restricted to the dark indigo area. */
+     not have to be argued about per width.
+
+     The fine print under the hero buttons was the same fault one line
+     further down, and worse: its tint measured 3.46:1 against the blue end.
+     It is white too. Nothing tinted is left on a gradient, so the
+     restriction that used to go with these two colours is gone. */
   --on-gradient-lead: #ffffff;
-  --on-gradient-fine: #c7d2fe;
+  --on-gradient-fine: #ffffff;
   --gradient-dark: #1e1b8f;
 
   /* Chart */

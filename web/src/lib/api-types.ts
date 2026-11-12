@@ -278,6 +278,65 @@ export interface PriceDistribution {
   items: ComparableItem[];
 }
 
+/**
+ * One thing about a mentor's answers, and what it does to their price.
+ *
+ * `effect_pct` is relative and the effects multiply rather than add, so the
+ * baseline multiplied by every row below gives back the suggested price.
+ * `direction` carries the sign in words, so nothing on the page has to rely
+ * on a colour or an arrow alone to say which way a row goes.
+ *
+ * `association` marks the rows drawn from what the platform has measured
+ * about a mentor with a record. Those are patterns among mentors who charge
+ * alike rather than things the mentor did, and the sentence says so.
+ */
+export interface PriceFactor {
+  key: string;
+  label: string;
+  direction: "raises" | "lowers" | "little effect";
+  effect_pct: number;
+  sentence: string;
+  association: boolean;
+}
+
+export interface PriceDifference {
+  key: string;
+  label: string;
+  sentence: string;
+}
+
+export interface PriceComparison {
+  position: "below" | "within" | "above" | "unknown";
+  percentile: number | null;
+  median_price: number | null;
+  band_low: number | null;
+  band_high: number | null;
+  compared_with: number;
+  matched_total: number;
+  match_description: string;
+  sentence: string;
+  /** Present only when the suggestion is outside the middle band. */
+  explains_gap: string | null;
+  differences: PriceDifference[];
+}
+
+export interface Explanation {
+  recommendation_id: number;
+  service_id: number;
+  model_used: string;
+  low_confidence: boolean;
+  currency: string;
+  baseline_price: number;
+  baseline_sentence: string;
+  suggested_price: number;
+  factors: PriceFactor[];
+  other_small_effects: PriceFactor | null;
+  combination_note: string;
+  limitation: string;
+  profile_note: string;
+  comparison: PriceComparison;
+}
+
 export interface ComparablesResponse {
   summary: ComparablesSummary;
   histogram: PriceHistogram;

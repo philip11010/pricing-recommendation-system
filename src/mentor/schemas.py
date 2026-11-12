@@ -931,6 +931,137 @@ class PriceDistributionOut(BaseModel):
     )
 
 
+class PriceFactorOut(BaseModel):
+    """
+    One thing about a mentor's answers, and what it does to their price.
+
+    ``effect_pct`` is relative: a factor at 12 says this answer leaves the
+    price twelve per cent above what it would otherwise have been, and the
+    factors multiply rather than add. It is a whole percent because a reader
+    cannot act on a tenth of one and because a figure carried to decimals
+    invites a confidence the number does not have.
+
+    ``direction`` carries the sign in words so that a page never has to rely
+    on a colour or an arrow alone to say which way a factor goes.
+
+    ``association`` is true for the themes drawn from what the platform has
+    measured about a mentor. Those are patterns among mentors who charge
+    alike, not things the mentor did that produced a price, and the sentence
+    says so.
+    """
+
+    key: str = Field(examples=["group_size"])
+    label: str = Field(examples=["Your group size"])
+    direction: str = Field(
+        description="One of raises, lowers, little effect.", examples=["raises"]
+    )
+    effect_pct: int = Field(
+        description=(
+            "How much this answer multiplies the price by, as a whole "
+            "percent above or below."
+        ),
+        examples=[12],
+    )
+    sentence: str = Field(description="The factor in one plain sentence.")
+    association: bool = Field(
+        default=False,
+        description=(
+            "True when this is a pattern among similar mentors rather than "
+            "an answer the mentor gave."
+        ),
+    )
+
+
+class PriceDifferenceOut(BaseModel):
+    """One way this mentor's service differs from the ones beside it."""
+
+    key: str = Field(examples=["skills"])
+    label: str = Field(examples=["Skills covered"])
+    sentence: str
+
+
+class PriceComparisonOut(BaseModel):
+    """
+    Where a suggestion lands among the mentors the price screen draws.
+
+    Read off the same reduced sample as the chart and the band, so the
+    sentence here and the dots there describe the same mentors.
+
+    ``explains_gap`` is present only when the suggestion is outside the
+    middle band. It names the one or two largest factors pointing that way,
+    as advice rather than as a fault: a mentor whose price is above the
+    middle may have good reason for it, and the page says what the reason
+    looks like rather than telling them to change it.
+    """
+
+    position: str = Field(
+        description="below, within, above, or unknown when there are too few.",
+        examples=["within"],
+    )
+    percentile: float | None = Field(
+        default=None,
+        description=(
+            "The share of the compared mentors charging this much or less, "
+            "or null when there is nobody to place it among."
+        ),
+    )
+    median_price: int | None = None
+    band_low: int | None = None
+    band_high: int | None = None
+    compared_with: int = Field(
+        description="How many mentors the comparison was read from."
+    )
+    matched_total: int = Field(description="How many mentors were matched in all.")
+    match_description: str
+    sentence: str
+    explains_gap: str | None = None
+    differences: list[PriceDifferenceOut] = Field(default_factory=list)
+
+
+class ExplanationOut(BaseModel):
+    """
+    Why one price was suggested, in the mentor's own words.
+
+    The arithmetic closes: the baseline multiplied by every effect below,
+    including the small ones gathered into one row, gives back
+    ``suggested_price`` to within the rounding of a whole percent. That is
+    the point of the response rather than a detail of it, because an account
+    that did not close would be a story told beside a number instead of an
+    account of it.
+
+    ``limitation`` and ``profile_note`` are fixed sentences and are always
+    present. They are part of the answer rather than small print: the first
+    says what these patterns are and are not, and the second says plainly
+    that the three things a mentor is most likely to expect to count here do
+    not.
+    """
+
+    recommendation_id: int
+    service_id: int
+    model_used: str = Field(examples=["core"])
+    low_confidence: bool
+    currency: str = Field(default=mapping.CURRENCY, examples=[mapping.CURRENCY])
+    baseline_price: int = Field(
+        description="Where a price for a mentor in this situation starts."
+    )
+    baseline_sentence: str
+    suggested_price: int
+    factors: list[PriceFactorOut] = Field(
+        description="Largest effect first, at most five."
+    )
+    other_small_effects: PriceFactorOut | None = Field(
+        default=None,
+        description=(
+            "Everything too small to list, multiplied into one row, or null "
+            "when there was nothing left over."
+        ),
+    )
+    combination_note: str
+    limitation: str
+    profile_note: str
+    comparison: PriceComparisonOut
+
+
 class ComparablesOut(BaseModel):
     """
     What mentors like this one charge: the summary, the spread, the rows.

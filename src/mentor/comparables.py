@@ -73,6 +73,26 @@ COMPARABLES_COLUMNS: tuple[str, ...] = (
     "rating_overall",
     "booked_share_365d",
     "reviews_total",
+    # The four answers a mentor gives that a comparable mentor also has an
+    # answer to. They are here so that "you charge more than most of them"
+    # can be followed by what is different about what you offer, rather than
+    # left as a figure with no account of itself. They are never published
+    # per mentor: only the typical value across a match is reported, which is
+    # why they are absent from :func:`as_item`.
+    "skills_covered",
+    "profile_verified",
+    "services_count",
+    "min_commitment",
+)
+
+# What a comparison can say a mentor differs from the others in. Mentor-facing
+# names on both sides, in the order a difference reads most naturally.
+PROFILE_COLUMNS: tuple[str, ...] = (
+    "max_mentees",
+    "skills_covered",
+    "profile_verified",
+    "services_count",
+    "min_commitment",
 )
 
 # The fewest comparable mentors worth drawing a median from. Ten is a
@@ -385,6 +405,34 @@ def distribution(found: ComparableSet, points: int = SPREAD_POINTS) -> dict[str,
         "sampled": bool(len(sample) < found.count),
         "items": [as_item(row) for _, row in sample.iterrows()],
     }
+
+
+def typical_profile(
+    found: ComparableSet, points: int = SPREAD_POINTS
+) -> dict[str, Any]:
+    """
+    What a typical mentor in this match offers, not what they charge.
+
+    Read off the same sample as the summary and the chart, so a sentence
+    saying a mentor covers more skills than the mentors they are compared
+    with is talking about the mentors that were drawn beside them.
+
+    The median for the four counted answers, because one mentor offering
+    thirty skills should not move what "typical" means, and the share
+    verified for the one that is yes or no. Empty when there is nobody to
+    describe: a median of nothing is not zero.
+    """
+    sample = spread(found, points)
+    if sample.empty:
+        return {}
+    typical: dict[str, Any] = {
+        column: float(sample[column].median())
+        for column in PROFILE_COLUMNS
+        if column != "profile_verified"
+    }
+    typical["profile_verified"] = float(sample["profile_verified"].mean())
+    typical["count"] = int(len(sample))
+    return typical
 
 
 def histogram(found: ComparableSet, bins: int = HISTOGRAM_BINS) -> dict[str, Any]:

@@ -13,6 +13,11 @@ import { registerMentor, requireApi } from "./helpers";
  * everywhere and this test reads the colour the browser actually computed
  * rather than the class that was asked for.
  *
+ * The fine print under the buttons was the same fault one line further down,
+ * and worse: its tint measured 3.46:1 against the blue end. It is white too,
+ * which is why it is checked here beside the lead rather than left as the one
+ * tinted thing still sitting on a gradient.
+ *
  * The widths are the five in web/DESIGN.md: the narrowest phone the layout
  * supports, a common phone, a tablet, the width where the two column hero
  * resolves, and a desktop.
@@ -57,6 +62,17 @@ test("the log in screen carries no tinted lead at any width", async ({ page }) =
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     expect(await leadToken(page), `${width}px`).toBe(WHITE);
+  }
+});
+
+test("the fine print under the hero buttons is white at every width", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await colourOf(page, /^Free to try/), `${width}px`).toBe(WHITE);
   }
 });
 

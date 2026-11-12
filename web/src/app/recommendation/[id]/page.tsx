@@ -43,6 +43,7 @@ import {
   WITH_HISTORY_NOTE,
   decisionWord,
 } from "@/lib/copy";
+import { EXPLANATION_ANCHOR, PriceExplanation } from "@/components/price-explanation";
 import { isNotFound, isUnprepared, messageFor } from "@/lib/errors";
 import { similarHref } from "@/lib/origin";
 import { groupWords } from "@/lib/session-label";
@@ -272,6 +273,27 @@ function PriceScreen({ mentor }: { mentor: Mentor }) {
               Similar mentors charge {formatMoney(recommendation.price_low)} to{" "}
               {formatMoney(recommendation.price_high)}
             </p>
+            {/* Beside the figure, because that is where the question is
+                asked. Focus moves with the page, so somebody reading with a
+                keyboard arrives at the heading rather than somewhere above
+                it. */}
+            <p className="mt-1.5">
+              <a
+                href={`#${EXPLANATION_ANCHOR}`}
+                onClick={(event) => {
+                  const heading = document.getElementById(EXPLANATION_ANCHOR);
+                  if (!heading) {
+                    return;
+                  }
+                  event.preventDefault();
+                  heading.scrollIntoView({ behavior: "smooth", block: "start" });
+                  heading.focus({ preventScroll: true });
+                }}
+                className="font-semibold text-link-700 underline underline-offset-[3px] hover:text-link-800"
+              >
+                How is this calculated?
+              </a>
+            </p>
             <p className="mt-4 text-ink-700">{ADVISORY_LINE}</p>
 
             {recommendation.low_confidence ? (
@@ -321,7 +343,13 @@ function PriceScreen({ mentor }: { mentor: Mentor }) {
       </section>
 
       <Column wide className="py-12">
-        <Comparisons recommendation={recommendation} />
+        <div className="grid gap-6">
+          {/* The account comes before the charts: a mentor asks what the
+              number is, then why it is that number, then what everybody
+              else charges. */}
+          <PriceExplanation recommendationId={recommendation.id} />
+          <Comparisons recommendation={recommendation} />
+        </div>
       </Column>
     </>
   );

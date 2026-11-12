@@ -34,7 +34,12 @@ from src.mentor.comparables import (
     load_comparables,
 )
 
-from .conftest import SYNTHETIC_HISTORY, headers, synthetic_comparables
+from .conftest import (
+    SYNTHETIC_HISTORY,
+    SYNTHETIC_PROFILE,
+    headers,
+    synthetic_comparables,
+)
 from .conftest import register as register_mentor
 from .conftest import registration as registration_body
 
@@ -145,6 +150,7 @@ def test_a_match_with_nobody_in_it_is_empty_rather_than_invented():
                 "rating_overall": 4.5,
                 "booked_share_365d": 0.5,
                 "reviews_total": 20,
+                **SYNTHETIC_PROFILE,
             }
         ]
     )
@@ -288,6 +294,7 @@ def test_a_single_price_is_one_bin_rather_than_an_invented_spread():
                 "rating_overall": 4.5,
                 "booked_share_365d": 0.5,
                 "reviews_total": 20,
+                **SYNTHETIC_PROFILE,
             }
             for index in range(3)
         ]
@@ -317,6 +324,7 @@ def test_a_percentile_is_the_share_of_mentors_charging_that_much_or_less(
                 "rating_overall": 4.5,
                 "booked_share_365d": 0.5,
                 "reviews_total": 20,
+                **SYNTHETIC_PROFILE,
             }
             for index, value in enumerate([100, 200, 300, 400])
         ]

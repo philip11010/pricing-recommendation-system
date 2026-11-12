@@ -86,7 +86,12 @@ class BuildError(RuntimeError):
 
 def source_columns() -> tuple[str, ...]:
     """The dataset columns read beyond the ones the population filters use."""
-    return tuple(mapping.HISTORY_FIELDS[name] for name in CARRIED_FIELDS)
+    return tuple(mapping.HISTORY_FIELDS[name] for name in CARRIED_FIELDS) + (
+        mapping.COLUMN_SKILLS,
+        mapping.COLUMN_VERIFIED,
+        mapping.COLUMN_SERVICES,
+        mapping.COLUMN_MIN_COMMITMENT,
+    )
 
 
 def population() -> pd.DataFrame:
@@ -136,6 +141,23 @@ def build(rows: pd.DataFrame) -> pd.DataFrame:
                 "float64"
             ),
             REVIEWS_FIELD: rows[mapping.HISTORY_FIELDS[REVIEWS_FIELD]].astype("int64"),
+            # The four answers a mentor is asked that a comparable mentor
+            # also has an answer to, carried so that a comparison can say
+            # what is different about what this mentor offers and not only
+            # what they charge. Counted the way the form counts them, so
+            # "you cover four more skills than most of them" is four of the
+            # same things the mentor ticked.
+            "skills_covered": (
+                (rows[mapping.COLUMN_SKILLS] / mapping.SKILL_WEIGHT)
+                .round()
+                .clip(lower=0, upper=mapping.SKILL_COUNT)
+                .astype("int64")
+            ),
+            "profile_verified": rows[mapping.COLUMN_VERIFIED].astype("int64"),
+            "services_count": rows[mapping.COLUMN_SERVICES].round().astype("int64"),
+            "min_commitment": (
+                rows[mapping.COLUMN_MIN_COMMITMENT].round().astype("int64")
+            ),
         }
     )
     table = table.dropna(subset=list(CARRIED_FIELDS)).reset_index(drop=True)

@@ -426,6 +426,129 @@ HISTORY_MEASURE_FIELDS: tuple[str, ...] = (
     HISTORY_TENURE_FIELD,
 )
 
+# ---------------------------------------------------------------------------
+# What an explanation of a price is allowed to name
+#
+# A price is worked out from model columns and explained in a mentor's own
+# words, so the join between the two belongs here with every other join of
+# that kind. The explanation code reads these and never a column name.
+#
+# Three kinds of input, and the difference between them is what a mentor can
+# do about them.
+#
+# **Fixed.** Held at one value for everybody, or held at a starting value for
+# somebody who has just joined. A mentor did not choose them and cannot change
+# them, so they are folded into the starting point a price is explained from
+# rather than listed as something that moved it. Listing them would be
+# offering a mentor a lever that is not connected to anything.
+#
+# **Choices.** The answers on the form. These are what the explanation is
+# for.
+#
+# **Record.** What the platform has measured about a mentor who has been here
+# a while. Twenty-nine quantities is not an explanation, so they are read as
+# four themes, and each theme carries a caution: a price moving with a theme
+# is an association among mentors who charge alike, not a claim that one
+# causes the other.
+# ---------------------------------------------------------------------------
+EXPLANATION_FIXED_COLUMNS: tuple[str, ...] = (COLUMN_SESSION_FORMAT,)
+
+CHOICE_FIELD = "field"
+CHOICE_GROUP_SIZE = "group_size"
+CHOICE_SKILLS = "skills"
+CHOICE_VERIFIED = "verified"
+CHOICE_SERVICES = "services"
+CHOICE_COMMITMENT = "commitment"
+
+# The order is the order a mentor answered them in, which is the order they
+# are tie-broken in when two effects are the same size.
+EXPLANATION_CHOICES: dict[str, dict[str, Any]] = {
+    CHOICE_FIELD: {"column": COLUMN_FIELD, "label": "Your field"},
+    CHOICE_GROUP_SIZE: {"column": COLUMN_MAX_MENTEES, "label": "Your group size"},
+    CHOICE_SKILLS: {"column": COLUMN_SKILLS, "label": "The skills you cover"},
+    CHOICE_VERIFIED: {"column": COLUMN_VERIFIED, "label": "Your verified profile"},
+    CHOICE_SERVICES: {"column": COLUMN_SERVICES, "label": "The services you offer"},
+    CHOICE_COMMITMENT: {
+        "column": COLUMN_MIN_COMMITMENT,
+        "label": "Your minimum commitment",
+    },
+}
+
+CHOICE_COLUMNS: tuple[str, ...] = tuple(
+    choice["column"] for choice in EXPLANATION_CHOICES.values()
+)
+
+THEME_REVIEWS = "reviews"
+THEME_RATINGS = "ratings"
+THEME_BOOKINGS = "bookings"
+THEME_STANDING = "standing"
+
+# Four themes over every quantity the track-record table holds. The grouping
+# is by what a mentor would recognise as one thing about themselves: how the
+# reviews have come in, what mentees rate them, how much of their offered
+# time gets taken, and how long they have been here with what standing.
+EXPLANATION_THEMES: dict[str, dict[str, Any]] = {
+    THEME_REVIEWS: {
+        "label": "How your reviews have come in",
+        "fields": (
+            "reviews_total",
+            "reviews_last_12_months",
+            "reviews_per_month",
+            "reviews_90d",
+            "reviews_180d",
+            "reviews_365d",
+            "days_since_last_review",
+            "review_growth",
+            "years_since_first_review",
+            "has_no_reviews",
+        ),
+    },
+    THEME_RATINGS: {
+        "label": "What mentees rate you",
+        "fields": HISTORY_RATING_FIELDS,
+    },
+    THEME_BOOKINGS: {
+        "label": "How much of your time is booked",
+        "fields": (
+            "open_slots_next_year",
+            "booked_share_30d",
+            "booked_share_60d",
+            "booked_share_90d",
+            "booked_share_365d",
+            "booked_share_weekend_365d",
+            "booked_share_weekday_365d",
+            "booked_share_weekend_minus_weekday",
+            "availability_blocks_365d",
+            "has_booking_data",
+        ),
+    },
+    THEME_STANDING: {
+        "label": "Your standing and time on the platform",
+        "fields": ("top_rated_mentor",),
+    },
+}
+
+
+def explanation_theme_columns() -> dict[str, tuple[str, ...]]:
+    """
+    Each theme as the model columns behind it.
+
+    Tenure joins the standing theme for a mentor who has a record, because
+    for them it is a measurement rather than the starting value the form path
+    holds it at. For a mentor without one it is fixed, and the caller folds it
+    into the baseline instead.
+    """
+    grouped = {
+        name: tuple(HISTORY_FIELDS[field] for field in theme["fields"])
+        for name, theme in EXPLANATION_THEMES.items()
+    }
+    grouped[THEME_STANDING] = (*grouped[THEME_STANDING], COLUMN_TENURE)
+    return grouped
+
+
+def explanation_theme_label(name: str) -> str:
+    return str(EXPLANATION_THEMES[name]["label"])
+
 
 class ModelColumnsMismatchError(RuntimeError):
     """
@@ -660,6 +783,45 @@ def max_mentees_from_inputs(inputs: dict[str, Any]) -> int:
             "max_mentees",
             "The stored inputs behind this price do not say how many mentees "
             "the session was for.",
+        ) from error
+
+
+def skills_count_from_inputs(inputs: dict[str, Any]) -> int:
+    """How many skills a stored set of model inputs stands for."""
+    try:
+        counted = round(float(inputs[COLUMN_SKILLS]) / SKILL_WEIGHT)
+    except (KeyError, TypeError, ValueError) as error:
+        raise MentorInputError(
+            "skills",
+            "The stored inputs behind this price do not say how many skills "
+            "the service covers.",
+        ) from error
+    return int(min(max(counted, 0), SKILL_COUNT))
+
+
+def answers_from_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    """
+    The mentor's own answers, read back out of a stored set of model inputs.
+
+    The one direction this module had been missing. A price is stored as the
+    row it was worked out from, and anything that wants to talk about that
+    price in a mentor's words would otherwise have to name the columns
+    itself, which is the boundary this module exists to hold.
+    """
+    try:
+        return {
+            CHOICE_FIELD: field_from_column_value(inputs[COLUMN_FIELD]),
+            CHOICE_GROUP_SIZE: int(inputs[COLUMN_MAX_MENTEES]),
+            CHOICE_SKILLS: skills_count_from_inputs(inputs),
+            CHOICE_VERIFIED: bool(int(inputs[COLUMN_VERIFIED])),
+            CHOICE_SERVICES: int(inputs[COLUMN_SERVICES]),
+            CHOICE_COMMITMENT: int(inputs[COLUMN_MIN_COMMITMENT]),
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise MentorInputError(
+            "inputs",
+            "The stored answers behind this price are incomplete, so it "
+            "cannot be explained.",
         ) from error
 
 

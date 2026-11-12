@@ -38,6 +38,8 @@ from typing import Any
 import joblib
 import numpy as np
 import pandas as pd
+import xgboost
+from sklearn.isotonic import IsotonicRegression
 
 from src.config import PROJECT_ROOT
 from src.mentor.mapping import (
@@ -58,7 +60,7 @@ CORE = "core"
 FULL = "full"
 
 # ---------------------------------------------------------------------------
-# The monotone envelope
+# The monotone correction
 #
 # Two of the answers behind a price are ones a mentor can only raise by
 # offering more: how many skills the service covers, and how many mentees can
@@ -73,32 +75,59 @@ FULL = "full"
 # a mentor ticking one more skill, or adding one more seat, and watching their
 # suggested price fall.
 #
-# So a price is read off an envelope rather than off the single point the
-# model returns. For one profile the service scores every combination of a
-# group size up to the one asked for and a skill count up to the one chosen,
-# in a single call, and takes the largest. The price at a given pair is
-# therefore the best the model says about that profile at that pair or at any
-# smaller one, which is non-decreasing in both by construction. Plateaus are
-# expected and are the honest answer: they say the model sees no further gain,
-# not that there is a loss.
+# So a price is read off a corrected surface rather than off the single point
+# the model returns, and the two axes are corrected differently because the
+# evidence along them is different.
 #
-# Because the range either side is worked out from the enveloped price rather
+# **Skills: an isotonic fit.** For one profile at one group size the service
+# scores the whole skill ladder, every count the form offers, and fits a
+# non-decreasing curve through those scores with scikit-learn's isotonic
+# regression, in log price, which is the space the models were fitted in. The
+# price is that curve read at the chosen count. Isotonic regression returns
+# the closest non-decreasing curve to the scores in a least squares sense, so
+# the answer is held between the smallest and largest score on the ladder
+# rather than pushed to one end of it.
+#
+# That last property is why this replaced a running maximum. Taking the
+# largest score up to the chosen count also produces a non-decreasing answer,
+# but every dip in a noisy ladder ratchets the answer upwards and it never
+# comes back down, so the correction quietly became a bias: a profile the
+# model scored at 175 was quoted at 281. The isotonic fit smooths the same
+# dips without inventing height, because a flat stretch of the fit is the
+# average of the scores under it rather than the maximum of them.
+#
+# **Group size: unchanged.** The price at a group size is still the largest
+# corrected price at that size or any smaller one. A seat added can therefore
+# never lower a price, and that rule is deliberately left as it was.
+#
+# Both together: the price at a pair is the largest isotonic answer across
+# every group size up to the one asked for, read at the chosen skill count.
+# Non-decreasing in both by construction. Plateaus are expected and are the
+# honest answer: they say the model sees no further gain, not that there is a
+# loss.
+#
+# Because the range either side is worked out from the corrected price rather
 # than from the raw one, neither end of it can fall as a skill is ticked or a
 # seat is added either.
 #
-# Three things this deliberately is not. It is not a retrain: the fitted
+# Two things this deliberately is not. It is not a retrain: the fitted
 # pipelines are untouched and the correction lives in the service that reads
-# them. It is not a per-skill weighting: a model is given the count and
+# them. And it is not a per-skill weighting: a model is given the count and
 # nothing else about which skills were chosen, so there is no evidence in the
-# system for one skill being worth more than another. And it is not symmetric:
-# it can only raise a price relative to the raw model, never lower one, which
-# is a bias worth stating wherever these prices are reported.
+# system for one skill being worth more than another.
 #
 # The fewest skills a service may offer is zero. A mentor may publish a
 # service before choosing what to put in it, so zero is a real answer and the
-# envelope starts there.
+# ladder starts there.
 # ---------------------------------------------------------------------------
 SKILL_COUNT_MIN = 0
+
+# Every skill count the form can produce, which is what the isotonic curve is
+# fitted through. The whole ladder rather than the part below the chosen
+# count: a curve fitted only up to the chosen count would be refitted on
+# different data at every count, and the answer it gave would not have to
+# rise as the count did.
+SKILL_LADDER: tuple[int, ...] = tuple(range(SKILL_COUNT_MIN, SKILL_COUNT + 1))
 
 ASSETS_MISSING_MESSAGE = (
     "The pricing models are not available on this server. They are build "
@@ -303,14 +332,18 @@ class PricingService:
 
     def envelope_rows(self, values: dict[str, Any]) -> list[dict[str, Any]]:
         """
-        Every smaller-or-equal service this profile is priced against.
+        Every row this profile's price is worked out from.
 
-        One row per combination of a group size from the smallest the form
-        offers up to the one asked for, and a skill count from none up to the
-        one chosen. The row itself is always in the list, as the largest pair.
+        One whole skill ladder per group size, from the smallest the form
+        offers up to the one asked for. The ladder is complete at every size,
+        because an isotonic curve is fitted through it and a curve fitted
+        through part of a ladder is a different curve. The row itself is
+        always in the list, at its own size and its own count.
+
+        Ordered size by size, each size's ladder in ascending count, which is
+        the shape :meth:`predict_many` reads it back as.
         """
         mentees = self.group_size(values)
-        count = self.skill_count(values)
         return [
             {
                 **values,
@@ -318,8 +351,39 @@ class PricingService:
                 COLUMN_SKILLS: step * SKILL_WEIGHT,
             }
             for size in range(MAX_MENTEES_MIN, mentees + 1)
-            for step in range(SKILL_COUNT_MIN, count + 1)
+            for step in SKILL_LADDER
         ]
+
+    def rising_ladder(self, ladder: Sequence[float]) -> np.ndarray:
+        """
+        One ladder of log prices, made non-decreasing.
+
+        scikit-learn's isotonic regression: the closest non-decreasing curve
+        to these scores in a least squares sense. Fitted in log price because
+        that is the space the models were fitted in, and read back at every
+        count so that the caller can take the one it wants.
+
+        Held in one place so that the correction a mentor is quoted and the
+        correction an explanation reconciles against are the same arithmetic.
+        """
+        shape = IsotonicRegression(increasing=True, out_of_bounds="clip")
+        return np.asarray(
+            shape.fit_transform(SKILL_LADDER, np.asarray(ladder, dtype=float)),
+            dtype=float,
+        )
+
+    def corrected_log_price(self, grid: np.ndarray, count: int) -> float:
+        """
+        The corrected log price for one profile, from its own block of scores.
+
+        ``grid`` is one row per group size up to the one asked for, each row a
+        whole skill ladder, exactly as :meth:`envelope_rows` laid them out.
+        Each row is made non-decreasing and read at ``count``; the answer is
+        the largest of those, which is the group size rule left as it was.
+        """
+        return max(
+            float(self.rising_ladder(ladder)[count]) for ladder in np.atleast_2d(grid)
+        )
 
     def raw_prices_by_skill_count(
         self, values: dict[str, Any], model_used: str
@@ -341,17 +405,107 @@ class PricingService:
         ]
         return self._raw_prices(ladder, model_used)
 
+    def input_sources(self, model_used: str) -> tuple[str, ...]:
+        """
+        Which input each column of the prepared matrix came from.
+
+        The preparation step widens one input into several columns: a choice
+        with several possible answers becomes one column per answer, and a
+        value that can be absent gets a column saying whether it was. An
+        account of a price has to be given one input at a time, so this is
+        the list that says which of them to add together.
+
+        Matched by name against the inputs the model takes, longest first,
+        because one input's name can be the start of another's.
+        """
+        prepared = (
+            self.pipelines[model_used].named_steps["preprocess"].get_feature_names_out()
+        )
+        columns = sorted(self.columns[model_used], key=len, reverse=True)
+        sources = []
+        for name in prepared:
+            body = str(name).split("__", 1)[-1]
+            if body.startswith("missingindicator_"):
+                body = body[len("missingindicator_") :]
+            found = next(
+                (
+                    column
+                    for column in columns
+                    if body == column or body.startswith(f"{column}_")
+                ),
+                None,
+            )
+            if found is None:  # pragma: no cover - a retrain would cause this
+                raise ValueError(
+                    f"the {model_used} model prepares a column this service "
+                    f"cannot trace back to one of its inputs"
+                )
+            sources.append(found)
+        return tuple(sources)
+
+    def log_contributions(
+        self, values: dict[str, Any], model_used: str
+    ) -> tuple[float, dict[str, float]]:
+        """
+        The model's own account of one score, one input at a time.
+
+        Returns the starting point every score begins from and what each
+        input added to or took off it, in log price. Exact rather than
+        estimated: the model is asked to decompose its own answer, and the
+        parts add up to the whole, which is what lets an explanation be
+        reconciled against the price instead of merely illustrating it.
+
+        Widened columns are summed back into the input they came from, so
+        the caller is handed one number per question a mentor answered.
+        """
+        pipeline = self.pipelines[model_used]
+        prepared = pipeline.named_steps["preprocess"].transform(
+            self._input_frame(model_used, [values])
+        )
+        parts = (
+            pipeline.named_steps["model"]
+            .get_booster()
+            .predict(xgboost.DMatrix(prepared), pred_contribs=True)[0]
+        )
+
+        # The last number is the starting point rather than a column, which
+        # is why the sources are zipped against everything but it.
+        totals = dict.fromkeys(self.columns[model_used], 0.0)
+        for source, part in zip(
+            self.input_sources(model_used), parts[:-1], strict=True
+        ):
+            totals[source] += float(part)
+        return float(parts[-1]), totals
+
+    def raw_envelope_prices(
+        self, values: dict[str, Any], model_used: str
+    ) -> list[float]:
+        """
+        Every raw price this profile's corrected price is worked out from.
+
+        The uncorrected scores behind one answer, clipped to the fences and
+        nothing else. Public because the claim worth testing about the
+        correction is where its answer sits among these: an isotonic fit is
+        held between the smallest and the largest of them, which a running
+        maximum was not, and a test that rebuilt this list for itself would
+        be measuring something other than what the service reads.
+        """
+        return self._raw_prices(self.envelope_rows(values), model_used)
+
+    def _raw_log_prices(
+        self, rows: Sequence[dict[str, Any]], model_used: str
+    ) -> np.ndarray:
+        """Every row scored in one call, in the log price the models return."""
+        frame = self._input_frame(model_used, rows)
+        return np.asarray(self.pipelines[model_used].predict(frame), dtype=float)
+
     def _raw_prices(
         self, rows: Sequence[dict[str, Any]], model_used: str
     ) -> list[float]:
         """Every row scored in one call, as a price inside the fences."""
-        frame = self._input_frame(model_used, rows)
-
         # The models were trained against log1p(price), so the inverse comes
         # first and every number after it is a price.
-        predicted_log = np.asarray(
-            self.pipelines[model_used].predict(frame), dtype=float
-        )
+        predicted_log = self._raw_log_prices(rows, model_used)
         return [self.clip(float(price)) for price in np.expm1(predicted_log)]
 
     def predict_many(
@@ -370,9 +524,9 @@ class PricingService:
         This is the one place a price is decided, which is what makes
         registration, the live preview, adding a service and asking for a
         fresh price agree: all four arrive here. Each row is expanded into the
-        envelope described at the top of this module, every expansion is
-        scored in one call, and the row's price is the largest price in its
-        own envelope. The range either side is then worked out from that
+        rows described at the top of this module, every expansion is scored in
+        one call, and the row's price is read off the correction those scores
+        are put through. The range either side is then worked out from that
         price rather than from the raw one, so neither end of it can fall as a
         skill is ticked or a seat is added either.
         """
@@ -380,7 +534,7 @@ class PricingService:
             return []
 
         envelopes = [self.envelope_rows(values) for values in rows]
-        prices = self._raw_prices(
+        scored = self._raw_log_prices(
             [row for envelope in envelopes for row in envelope], model_used
         )
 
@@ -391,8 +545,14 @@ class PricingService:
         advice = []
         read = 0
         for values, envelope in zip(rows, envelopes, strict=True):
-            point = max(prices[read : read + len(envelope)])
+            # One row of the block per group size, one column per skill count.
+            grid = scored[read : read + len(envelope)].reshape(-1, len(SKILL_LADDER))
             read += len(envelope)
+            point = self.clip(
+                float(
+                    np.expm1(self.corrected_log_price(grid, self.skill_count(values)))
+                )
+            )
             session = (
                 int(round(point)),
                 int(round(self.clip(point * low_multiplier))),
