@@ -1,26 +1,33 @@
 import { expect, type Page } from "@playwright/test";
 
 /**
- * The things more than one end-to-end test needs.
+ * The things more than one end to end test needs.
  *
- * Registering a mentor is the longest of them. It is written as a helper
- * rather than repeated because three of the five tests start from a mentor
- * who has just registered, and a form filled three slightly different ways
- * would be three different tests of three different things.
+ * Registering a mentor is the longest of them. It is written once rather than
+ * repeated, because four of these tests start from a mentor who has just
+ * registered, and a form filled four slightly different ways would be four
+ * tests of four different things.
+ *
+ * Nothing here mocks the API. What these tests are for is the agreement
+ * between this application and the pricing API: the names it sends, the
+ * shapes it reads back and the statuses it acts on. A mocked API agrees with
+ * whatever the mock was written to say.
  */
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
+/** The seeded account the history tests sign in as. Never written in a test. */
+export const DEMO_EMAIL = process.env.PLAYWRIGHT_DEMO_EMAIL ?? "";
+export const DEMO_PASSWORD = process.env.PLAYWRIGHT_DEMO_PASSWORD ?? "";
+
 /**
  * Stop with an explanation rather than with a wall of failed selectors.
  *
- * Every one of these tests needs the API, and most need the demonstration
- * mentors. An API that is not running produces a page saying so, and a test
- * that then fails on a missing heading tells you nothing about why.
+ * Every one of these tests needs the API, and some need the comparison table.
+ * An API that is not running produces a page saying so, and a test that then
+ * fails on a missing heading tells you nothing about why.
  */
-export async function requireApi(
-  options: { demoMentors?: boolean; comparables?: boolean } = {},
-) {
+export async function requireApi(options: { comparables?: boolean } = {}) {
   let health: Response;
   try {
     health = await fetch(`${API_URL}/health`);
@@ -43,16 +50,6 @@ export async function requireApi(
       "The pricing API has no table of comparable mentors, so it cannot say what mentors like you charge. Run: python scripts/build_comparables.py",
     );
   }
-
-  if (options.demoMentors) {
-    const response = await fetch(`${API_URL}/mentors/demo`);
-    const mentors = (await response.json()) as unknown[];
-    if (mentors.length === 0) {
-      throw new Error(
-        "There are no demonstration mentors. Run: python scripts/seed_demo_mentors.py",
-      );
-    }
-  }
 }
 
 /** An address nobody has registered with before, so registration never 409s. */
@@ -60,70 +57,72 @@ export function freshEmail(): string {
   return `mentor.${Date.now()}.${Math.floor(Math.random() * 10_000)}@example.com`;
 }
 
+export const PASSWORD = "a-long-enough-password";
+
+export interface Registered {
+  email: string;
+  password: string;
+  name: string;
+  /** The address of the price screen the registration landed on. */
+  priceUrl: string;
+}
+
 export interface RegistrationOptions {
-  /** How many mentees can join. 1 keeps the one to one path, 3 makes a group. */
+  /** How many people can join. 1 keeps the one to one path, 3 makes a group. */
   maxMentees?: number;
   skills?: string[];
+  name?: string;
+  email?: string;
 }
 
 /**
  * Fill in the whole registration form and submit it.
  *
- * Leaves the browser on the suggestion for the new mentor's first service.
+ * Leaves the browser on the suggested price for the new mentor's first
+ * service, and hands back what is needed to log in as them again.
  */
 export async function registerMentor(
   page: Page,
   options: RegistrationOptions = {},
-): Promise<void> {
-  const { maxMentees = 1, skills = ["CV review", "Interview preparation"] } = options;
+): Promise<Registered> {
+  const {
+    maxMentees = 1,
+    skills = ["CV review", "Interview preparation"],
+    name = "Test Mentor",
+    email = freshEmail(),
+  } = options;
 
   await page.goto("/register");
+  await expect(
+    page.getByRole("heading", { name: "Create your mentor profile" }),
+  ).toBeVisible();
 
-  // Step one: the account.
-  await page.getByLabel("Full name").fill("Test Mentor");
-  await page.getByLabel("Email address").fill(freshEmail());
-  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByLabel("Full name").fill(name);
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Your field").selectOption("technology_software");
 
-  // Step two: the profile, none of which is priced.
-  await page.getByLabel("Headline").fill("Helping new graduates find their footing");
-  await page
-    .getByLabel("Short bio")
-    .fill("Ten years in the field, six of them leading a team.");
-  await page.getByLabel("Highest education").selectOption("masters");
-  await page
-    .getByLabel("Professional experience")
-    .fill("Senior practitioner, then a team lead.");
-  await page.getByLabel("Years of mentoring experience").selectOption("3_to_5");
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  // Step three: the answers that set the price.
-  await page.getByLabel("Field", { exact: true }).selectOption("technology_software");
-
-  const stepper = page.getByRole("spinbutton");
   for (let seat = 1; seat < maxMentees; seat += 1) {
-    await page.getByRole("button", { name: "One more mentee" }).click();
+    await page.getByRole("button", { name: "More people" }).click();
   }
-  await expect(stepper).toHaveAttribute("aria-valuenow", String(maxMentees));
 
-  await page.getByLabel("Minimum booking commitment").selectOption("1");
   for (const skill of skills) {
     await page.getByRole("checkbox", { name: skill, exact: true }).check();
   }
 
-  await page.getByRole("button", { name: "Suggest my price" }).click();
+  await page.getByRole("button", { name: "See my suggested price" }).click();
   await expect(page).toHaveURL(/\/recommendation\/\d+$/);
-  await expect(page.getByText("Suggested price", { exact: true })).toBeVisible();
+  await expect(page.getByText("Suggested session price")).toBeVisible();
+
+  return { email, password: PASSWORD, name, priceUrl: page.url() };
 }
 
-/** Open the first demonstration mentor's own page. */
-export async function openDemoMentor(page: Page): Promise<string> {
-  await page.goto("/mentors");
-  const first = page.getByRole("button", { name: /^Continue as / }).first();
-  await expect(first).toBeVisible();
-  const label = (await first.textContent()) ?? "";
-  await first.click();
-  await expect(page).toHaveURL(/\/dashboard$/);
-  return label.replace("Continue as ", "").trim();
+/** Log in through the form, as a returning mentor would. */
+export async function logIn(page: Page, email: string, password: string) {
+  await page.goto("/login");
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Log in" }).click();
 }
 
 /** True when the page is wider than the window, which it never should be. */
@@ -133,4 +132,25 @@ export async function hasHorizontalScroll(page: Page): Promise<boolean> {
     // One pixel of slack: sub-pixel layout rounding is not a broken page.
     return element.scrollWidth > element.clientWidth + 1;
   });
+}
+
+/**
+ * The height of every button a mentor can see, for the touch target check.
+ *
+ * Scoped to the header, the page and the footer, because the development
+ * build draws an indicator button of its own that is not part of this
+ * application and is not in the production build at all.
+ */
+export async function visibleButtonHeights(page: Page): Promise<number[]> {
+  const buttons = await page
+    .locator("header button:visible, #main button:visible, footer button:visible")
+    .all();
+  const heights: number[] = [];
+  for (const button of buttons) {
+    const box = await button.boundingBox();
+    if (box) {
+      heights.push(box.height);
+    }
+  }
+  return heights;
 }

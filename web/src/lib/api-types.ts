@@ -1,7 +1,7 @@
 /**
  * The shapes the pricing API sends and accepts.
  *
- * Written by hand from the API's own OpenAPI schema rather than generated,
+ * Written by hand from the API's own OpenAPI document rather than generated,
  * for one reason: the generated types carry the API's internal names for
  * things, and this file is the last place those names appear. Everything a
  * mentor reads is built from the labels the API sends alongside them.
@@ -19,23 +19,29 @@ export interface Option<Id extends string | number = string> {
 /**
  * How a session is named, published as a rule rather than as a list.
  *
- * The form never asks what kind of session it is. It asks how many mentees
- * can join, and the name follows: one is one to one, two or more is a group.
+ * The form never asks what kind of session it is. It asks how many people can
+ * join, and the name follows: one is one to one, two or more is a group.
  */
 export interface SessionLabelRule {
   one_to_one: { id: string; label: string; max_mentees: number };
   group: { id: string; label: string; max_mentees_from: number };
 }
 
+export interface Bounds {
+  min: number;
+  max: number;
+}
+
 export interface OptionsResponse {
   currency: string;
   fields: Option[];
   skills: Option[];
-  max_mentees: { min: number; max: number };
+  max_mentees: Bounds;
   session_label_rule: SessionLabelRule;
   min_commitment: Option<number>[];
+  min_commitment_default: number;
   years_mentoring_bands: Option[];
-  services_planned: Option<number>[];
+  years_experience: Bounds;
   education_levels: Option[];
 }
 
@@ -88,22 +94,96 @@ export interface Mentor {
   education_level: string | null;
   experience_summary: string | null;
   credentials: string | null;
-  years_mentoring_band: string;
-  services_planned: number;
+  years_experience: number | null;
+  years_mentoring_band: string | null;
+  verified: boolean;
   is_demo: boolean;
   services: Service[];
   history: HistorySummary | null;
   created_at: string;
 }
 
-export interface DemoMentor {
+/* ------------------------------------------------------------------ auth */
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface RegistrationPayload {
+  name: string;
+  email: string;
+  password: string;
+  field: string;
+  max_mentees: number;
+  skills: string[];
+  min_commitment?: number;
+  years_experience?: number | null;
+  education_level?: string | null;
+  credentials?: string | null;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  mentor: Mentor;
+}
+
+export interface RegistrationResponse extends TokenResponse {
+  service: Service;
+  recommendation: Recommendation;
+}
+
+/* -------------------------------------------------------------- directory */
+
+/** One mentor as the public directory shows them. Carries no address. */
+export interface MentorCard {
   id: number;
   display_name: string;
-  headline: string | null;
   field_label: string;
+  service_name: string;
+  price: number | null;
+  max_mentees: number;
   session_label: string;
-  has_history: boolean;
+  verified: boolean;
+  review_count: number;
 }
+
+export interface MentorDirectory {
+  total: number;
+  limit: number;
+  offset: number;
+  items: MentorCard[];
+}
+
+export interface PublicMentor extends MentorCard {
+  skills: Option[];
+  years_experience: number | null;
+  years_mentoring_band: string | null;
+  education_level: string | null;
+  education_label: string | null;
+  credentials: string | null;
+}
+
+/* ---------------------------------------------------------------- preview */
+
+export interface PreviewPayload {
+  field: string;
+  max_mentees: number;
+  skills: string[];
+}
+
+export interface PreviewResponse {
+  session_price: number;
+  per_person_price: number;
+  range_low: number;
+  range_high: number;
+  currency: string;
+  low_confidence: boolean;
+}
+
+/* ----------------------------------------------------------------- prices */
 
 /** Where a mentor's current price sits against the advised range. */
 export type RangePosition = "below" | "within" | "above";
@@ -118,6 +198,8 @@ export interface Recommendation {
   price_per_mentee_low: number;
   price_per_mentee_high: number;
   currency: string;
+  max_mentees: number;
+  session_label: string;
   model_used: string;
   low_confidence: boolean;
   model_version: string;
@@ -126,6 +208,7 @@ export interface Recommendation {
   difference_vs_current_percent: number | null;
   position_vs_range: RangePosition | null;
   generated_at: string;
+  decision: Decision | null;
 }
 
 export interface ServiceInputPayload {
@@ -133,32 +216,14 @@ export interface ServiceInputPayload {
   max_mentees: number;
   min_commitment: number;
   skills: string[];
-  profile_verified: boolean;
-}
-
-export interface RegistrationPayload {
-  full_name: string;
-  email: string;
-  years_mentoring_band: string;
-  services_planned: number;
-  headline: string | null;
-  bio: string | null;
-  education_level: string | null;
-  experience_summary: string | null;
-  credentials: string | null;
-  service: ServiceInputPayload;
-}
-
-export interface RegistrationResponse {
-  mentor: Mentor;
-  service: Service;
-  recommendation: Recommendation;
 }
 
 export interface ServiceCreatedResponse {
   service: Service;
   recommendation: Recommendation;
 }
+
+/* ------------------------------------------------------------ comparables */
 
 export interface ComparablesSummary {
   count: number;
@@ -200,6 +265,8 @@ export interface ComparablesResponse {
 export type ComparablesSort = "price" | "rating";
 export type ComparablesOrder = "asc" | "desc";
 
+/* -------------------------------------------------------------- decisions */
+
 export type DecisionAction = "accepted" | "modified" | "rejected";
 
 export interface DecisionPayload {
@@ -226,6 +293,8 @@ export interface ServiceHistory {
   count: number;
   items: RecommendationHistoryItem[];
 }
+
+/* -------------------------------------------------------------- dashboard */
 
 export interface DecisionCounts {
   accepted: number;
@@ -265,14 +334,42 @@ export interface DashboardTotals {
   average_difference_percent: number | null;
 }
 
+/** The one line the mentor's own page opens with. */
+export interface DashboardHeadline {
+  your_price: number | null;
+  similar_typical: number | null;
+  position_vs_range: RangePosition | null;
+  sentence: string;
+  currency: string;
+}
+
 export interface Dashboard {
   mentor_id: number;
   display_name: string;
+  headline: DashboardHeadline;
   currency: string;
   comparables_available: boolean;
   totals: DashboardTotals;
   services: DashboardService[];
 }
+
+/**
+ * A mentor's own months.
+ *
+ * The four lists are the same length as `months`. A measurement that does not
+ * exist for a month is null rather than zero, which is not the same claim.
+ */
+export interface Activity {
+  has_history: boolean;
+  months: string[];
+  reviews_by_month: number[];
+  booked_share_by_month: (number | null)[];
+  price_by_month: (number | null)[];
+  currency: string;
+  note: string;
+}
+
+/* ----------------------------------------------------------------- errors */
 
 /** One answer the API wants changed, named as the form names it. */
 export interface ApiFieldError {

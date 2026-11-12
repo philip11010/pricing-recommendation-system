@@ -1,370 +1,416 @@
 "use client";
 
 /**
- * The mentor's own page.
+ * The mentor's own page: calm, with a banner.
  *
- * Per service: what they charge, what was last suggested, where that sits
- * against the market, how they have answered the advice, and the record of
- * both over time.
+ * What it shows is decided by what the platform actually measures. There is a
+ * record of reviews month by month, so there is one bar chart of those. There
+ * is no record of how busy a mentor has been or of what they charged in past
+ * months, so there is no chart of either: a line through months the platform
+ * cannot measure would be an invention.
  *
- * There are no earnings and no income anywhere on it. The system has no
- * bookings to count, so a total would have to invent a volume, and an
- * invented figure on the page a mentor trusts is worse than no figure at all.
+ * Four statistics, a sentence with the ladder under it, one chart, and the
+ * table of services with what the mentor decided about each price.
  */
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-
-import { ComparablesSummaryLine } from "@/components/comparables";
-import { RequireMentor } from "@/components/require-mentor";
-import { TimelineChart } from "@/components/timeline-chart";
+import { ReviewsChart } from "@/components/reviews-chart";
+import { PriceLadder } from "@/components/price-ladder";
+import { RequireAuth } from "@/components/require-auth";
 import {
-  Badge,
-  Button,
+  Banner,
   ButtonLink,
-  Callout,
   Card,
+  CheckIcon,
+  Chip,
+  Column,
   EmptyState,
   ErrorNotice,
   LoadingBlock,
-  SectionHeading,
   Statistic,
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
-import type {
-  Dashboard,
-  DashboardService,
-  Mentor,
-  ServiceHistory,
-} from "@/lib/api-types";
+import type { Activity, Dashboard, Mentor } from "@/lib/api-types";
 import {
-  COMPARABLES_UNAVAILABLE_NOTE,
-  POSITION_HEADINGS,
-  POSITION_MESSAGES,
-  decisionWord,
-} from "@/lib/copy";
+  MINIMUM_CHART_POINTS,
+  priceScale,
+  reviewStats,
+  type ReviewStats,
+} from "@/lib/charts";
+import { COMPARABLES_UNAVAILABLE_NOTE, decisionWord } from "@/lib/copy";
 import { messageFor } from "@/lib/errors";
-import {
-  formatDateTime,
-  formatMentees,
-  formatMoney,
-  formatPercent,
-} from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 import { useAsync } from "@/lib/use-async";
 
-interface PageData {
-  mentor: Mentor;
+function firstNameOf(name: string): string {
+  return (name ?? "").trim().split(/\s+/)[0] ?? "";
+}
+
+/** How the reviews statistic reads under its own figure. */
+function reviewsNote(stats: ReviewStats): string {
+  if (stats.previousMonths === 0) {
+    return stats.recentMonths > 0
+      ? `over the last ${stats.recentMonths} months`
+      : "nothing recorded yet";
+  }
+  if (stats.direction === "more") {
+    return `up from ${stats.previous} the period before`;
+  }
+  if (stats.direction === "fewer") {
+    return `down from ${stats.previous} the period before`;
+  }
+  return `the same as the period before`;
+}
+
+function HeadlineStatistics({
+  dashboard,
+  activity,
+  stats,
+}: {
   dashboard: Dashboard;
-  histories: Record<number, ServiceHistory | null>;
-}
-
-export default function DashboardPage() {
-  return (
-    <RequireMentor>{(mentorId) => <DashboardView mentorId={mentorId} />}</RequireMentor>
-  );
-}
-
-function DashboardView({ mentorId }: { mentorId: number }) {
-  const page = useAsync<PageData>(async (signal) => {
-    const [mentor, dashboard] = await Promise.all([
-      api.mentor(mentorId, signal),
-      api.dashboard(mentorId, signal),
-    ]);
-    const loaded = await Promise.all(
-      dashboard.services.map(async (service) => {
-        const history = await api
-          .history(mentorId, service.service_id, signal)
-          .catch(() => null);
-        return [service.service_id, history] as const;
-      }),
-    );
-    const histories: Record<number, ServiceHistory | null> = {};
-    for (const [serviceId, history] of loaded) {
-      histories[serviceId] = history;
-    }
-    return { mentor, dashboard, histories };
-  }, `dashboard-${mentorId}`);
-
-  if (page.status === "loading") {
-    return <LoadingBlock label="Loading your page" />;
-  }
-
-  if (page.status === "error" || page.data === null) {
-    return <ErrorNotice message={messageFor(page.error)} onRetry={page.reload} />;
-  }
-
-  const { mentor, dashboard, histories } = page.data;
-  const totals = dashboard.totals;
+  activity: Activity | null;
+  stats: ReviewStats;
+}) {
+  const headline = dashboard.headline;
+  const main = dashboard.services[0] ?? null;
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-          {dashboard.display_name}
-        </h1>
-        {mentor.headline ? (
-          <p className="mt-2 max-w-prose text-lg text-ink-muted">{mentor.headline}</p>
-        ) : null}
-        <div className="mt-4 flex flex-wrap gap-3">
-          <ButtonLink href="/dashboard/add-service" tone="secondary">
-            Add another service
-          </ButtonLink>
-        </div>
-      </header>
-
-      <Card>
-        <SectionHeading
-          title="Across your services"
-          description="How you have answered the suggestions so far. No earnings are reported here: there are no bookings in the system, so there is no volume to turn a price into a total."
-        />
-        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Statistic label="Services" value={totals.services} />
-          <Statistic
-            label="Services with a price"
-            value={totals.services_with_a_price}
-          />
-          <Statistic label="Suggestions given" value={totals.recommendations} />
-          <Statistic
-            label="Average gap from the suggestion"
-            value={
-              totals.average_difference_percent === null
-                ? "Not yet"
-                : formatPercent(totals.average_difference_percent, { signed: true })
-            }
-            hint={
-              totals.average_difference_percent === null
-                ? "Answer a suggestion with a price and this fills in."
-                : "Positive means you charged more than suggested."
-            }
-          />
-        </dl>
-        <dl className="mt-3 grid gap-3 sm:grid-cols-4">
-          <Statistic label="Accepted" value={totals.decision_counts.accepted} />
-          <Statistic label="Modified" value={totals.decision_counts.modified} />
-          <Statistic label="Declined" value={totals.decision_counts.rejected} />
-          <Statistic label="Pending" value={totals.decision_counts.pending} />
-        </dl>
-      </Card>
-
-      {dashboard.services.length === 0 ? (
-        <EmptyState
-          title="You have no services yet"
-          action={<ButtonLink href="/dashboard/add-service">Add a service</ButtonLink>}
-        >
-          Describe a session you offer and we will suggest a price for it.
-        </EmptyState>
-      ) : null}
-
-      {dashboard.services.map((service) => (
-        <ServiceCard
-          key={service.service_id}
-          mentorId={mentorId}
-          service={service}
-          history={histories[service.service_id] ?? null}
-          comparablesAvailable={dashboard.comparables_available}
-        />
-      ))}
+    <div className="grid gap-6 mid:grid-cols-2 lg:grid-cols-4">
+      <Statistic
+        label="Your price now"
+        value={headline.your_price ? formatMoney(headline.your_price) : "Not set yet"}
+        note={
+          main
+            ? main.max_mentees <= 1
+              ? "per one to one session"
+              : `per session of ${main.max_mentees}`
+            : "add a service to set one"
+        }
+      />
+      <Statistic
+        label="Similar mentors"
+        value={
+          headline.similar_typical
+            ? formatMoney(headline.similar_typical)
+            : "Not available"
+        }
+        note={
+          dashboard.comparables_available
+            ? "typical price"
+            : "no comparison on this server"
+        }
+      />
+      <Statistic
+        label="Reviews this year"
+        value={activity?.has_history ? String(stats.recent) : "None yet"}
+        note={activity?.has_history ? reviewsNote(stats) : "your reviews appear here"}
+      />
+      <Statistic
+        label="Busiest month"
+        value={stats.busiest ? stats.busiest.label : "None yet"}
+        note={
+          stats.busiest
+            ? `${stats.busiest.count} ${stats.busiest.count === 1 ? "review" : "reviews"}`
+            : "no reviews recorded"
+        }
+      />
     </div>
   );
 }
 
-function ServiceCard({
-  mentorId,
-  service,
-  history,
-  comparablesAvailable,
-}: {
-  mentorId: number;
-  service: DashboardService;
-  history: ServiceHistory | null;
-  comparablesAvailable: boolean;
-}) {
-  const router = useRouter();
-  const [reviewing, setReviewing] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+function HowYouCompare({ dashboard }: { dashboard: Dashboard }) {
+  const headline = dashboard.headline;
+  const main = dashboard.services[0] ?? null;
+  const comparables = main?.comparables ?? null;
 
-  async function reviewPrice() {
-    setReviewing(true);
-    setFailure(null);
-    try {
-      const recommendation = await api.createRecommendation(
-        mentorId,
-        service.service_id,
-      );
-      router.push(`/recommendation/${recommendation.id}`);
-    } catch (error) {
-      setFailure(messageFor(error));
-      setReviewing(false);
-    }
+  if (!dashboard.comparables_available) {
+    return (
+      <Card role="region" aria-label="How you compare">
+        <h2 className="text-h3 font-semibold">How you compare</h2>
+        <p className="mt-2 text-ink-700">{COMPARABLES_UNAVAILABLE_NOTE}</p>
+      </Card>
+    );
   }
 
-  const latest = service.latest_recommendation;
+  const band =
+    comparables && comparables.p25_price !== null && comparables.p75_price !== null
+      ? { low: comparables.p25_price, high: comparables.p75_price }
+      : null;
+
+  if (!band || headline.your_price === null) {
+    return (
+      <Card role="region" aria-label="How you compare">
+        <h2 className="text-h3 font-semibold">How you compare</h2>
+        <p className="mt-2 max-w-prose text-ink-700">{headline.sentence}</p>
+      </Card>
+    );
+  }
+
+  const scale = priceScale([
+    band.low,
+    band.high,
+    headline.your_price,
+    headline.similar_typical,
+    comparables?.median_price ?? null,
+  ]);
 
   return (
-    <Card>
-      <SectionHeading
-        title={service.field_label}
-        description={`${service.session_label}, up to ${formatMentees(
-          service.max_mentees,
-        )} per session.`}
-        action={
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => void reviewPrice()} disabled={reviewing}>
-              {reviewing ? "Working it out" : "Review my price"}
-            </Button>
-            {comparablesAvailable ? (
-              <Link
-                href={`/similar/${service.service_id}`}
-                className="inline-flex min-h-[44px] items-center rounded-xl border border-line bg-white px-4 text-sm font-semibold text-ink-muted hover:bg-shell"
-              >
-                Similar mentors
-              </Link>
-            ) : null}
-          </div>
-        }
-      />
-
-      {failure ? (
-        <div className="mb-4">
-          <Callout tone="caution">{failure}</Callout>
-        </div>
-      ) : null}
-
-      <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Statistic
-          label="You charge now"
-          value={formatMoney(service.current_price)}
-          hint="Per session"
+    <Card role="region" aria-label="How you compare">
+      <h2 className="text-h3 font-semibold">How you compare</h2>
+      <div className="mt-2">
+        <PriceLadder
+          scale={scale}
+          bandLow={band.low}
+          bandHigh={band.high}
+          current={headline.your_price}
+          sentence={headline.sentence}
+          tableCaption="Your price against similar mentors, in AUD"
         />
-        <Statistic
-          label="Latest suggestion"
-          value={latest ? formatMoney(latest.recommended_price) : "None yet"}
-          hint={latest ? formatDateTime(latest.generated_at) : undefined}
-        />
-        <Statistic
-          label="Your place in the market"
-          value={
-            service.price_percentile === null
-              ? "Not available"
-              : formatPercent(service.price_percentile, { decimals: 0 })
-          }
-          hint={
-            service.price_percentile === null
-              ? "Needs a price and a group to compare with."
-              : "Of comparable mentors charge the same or less."
-          }
-        />
-        <Statistic
-          label="Average gap from the suggestion"
-          value={
-            service.average_difference_percent === null
-              ? "Not yet"
-              : formatPercent(service.average_difference_percent, { signed: true })
-          }
-          hint={
-            service.average_difference_percent === null
-              ? "Answer a suggestion with a price and this fills in."
-              : "Positive means you charged more than suggested."
-          }
-        />
-      </dl>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-4">
-        <Statistic label="Accepted" value={service.decision_counts.accepted} />
-        <Statistic label="Modified" value={service.decision_counts.modified} />
-        <Statistic label="Declined" value={service.decision_counts.rejected} />
-        <Statistic label="Pending" value={service.decision_counts.pending} />
-      </div>
-
-      {service.position_vs_range ? (
-        <div className="mt-4">
-          <Callout
-            tone={service.position_vs_range === "within" ? "accent" : "caution"}
-            title={POSITION_HEADINGS[service.position_vs_range]}
-          >
-            {POSITION_MESSAGES[service.position_vs_range]}
-          </Callout>
-        </div>
-      ) : null}
-
-      <div className="mt-6 border-t border-line pt-5">
-        <h3 className="text-base font-semibold">Suggestions over time</h3>
-        {service.timeline.length === 0 ? (
-          <div className="mt-3">
-            <EmptyState title="Nothing to plot yet">
-              Ask for a price and answer it, and the suggestion and what you chose will
-              both appear here.
-            </EmptyState>
-          </div>
-        ) : (
-          <div className="mt-3">
-            <TimelineChart timeline={service.timeline} />
-          </div>
-        )}
-      </div>
-
-      <div className="mt-6 border-t border-line pt-5">
-        <h3 className="text-base font-semibold">Every suggestion for this service</h3>
-        {history === null ? (
-          <p className="mt-2 text-sm text-ink-muted">
-            We could not load the record for this service.
-          </p>
-        ) : history.items.length === 0 ? (
-          <div className="mt-3">
-            <EmptyState title="No suggestions yet">
-              Use Review my price above to get one.
-            </EmptyState>
-          </div>
-        ) : (
-          <ul className="mt-3 divide-y divide-line">
-            {history.items.map((item) => {
-              const status = item.decision?.action ?? item.recommendation.status;
-              return (
-                <li
-                  key={item.recommendation.id}
-                  className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium">
-                      {formatDateTime(item.recommendation.generated_at)}
-                    </p>
-                    <p className="text-xs text-ink-soft">
-                      Suggested {formatMoney(item.recommendation.recommended_price)}
-                      {item.decision?.final_price !== null &&
-                      item.decision?.final_price !== undefined
-                        ? `, you chose ${formatMoney(item.decision.final_price)}`
-                        : ""}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Badge tone={status === "pending" ? "quiet" : "accent"}>
-                      {decisionWord(status)}
-                    </Badge>
-                    <Link
-                      href={`/recommendation/${item.recommendation.id}`}
-                      className="text-sm font-semibold text-accent-800 underline"
-                    >
-                      Open
-                    </Link>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-
-      <div className="mt-6 border-t border-line pt-5">
-        <h3 className="text-base font-semibold">The group you are compared with</h3>
-        <div className="mt-3">
-          {service.comparables === null ? (
-            <Callout tone="quiet">{COMPARABLES_UNAVAILABLE_NOTE}</Callout>
-          ) : (
-            <ComparablesSummaryLine summary={service.comparables} />
-          )}
-        </div>
       </div>
     </Card>
   );
+}
+
+function ReviewsSection({ activity }: { activity: Activity | null }) {
+  if (!activity || !activity.has_history || activity.months.length === 0) {
+    return (
+      <Card role="region" aria-label="Reviews each month">
+        <h2 className="text-h3 font-semibold">Reviews each month</h2>
+        <p className="mt-2 max-w-prose text-ink-700">
+          You have no reviews recorded yet. Once mentees start reviewing your sessions,
+          this is where you will see how they arrive month by month.
+        </p>
+      </Card>
+    );
+  }
+
+  const stats = reviewStats(activity.months, activity.reviews_by_month);
+
+  if (activity.months.length < MINIMUM_CHART_POINTS) {
+    return (
+      <Card role="region" aria-label="Reviews each month">
+        <h2 className="text-h3 font-semibold">Reviews each month</h2>
+        <p className="mt-2 max-w-prose text-ink-700">{activity.note}</p>
+        <div className="mt-4 grid gap-6 mid:grid-cols-2">
+          <Statistic
+            label="Reviews recorded"
+            value={String(stats.total)}
+            note={`over ${activity.months.length} ${activity.months.length === 1 ? "month" : "months"}`}
+          />
+          <Statistic
+            label="Busiest month"
+            value={stats.busiest ? stats.busiest.label : "None yet"}
+            note={stats.busiest ? `${stats.busiest.count} reviews` : undefined}
+          />
+        </div>
+        <p className="mt-4 text-small text-ink-500">
+          We show a chart once there are at least {MINIMUM_CHART_POINTS} months to read
+          it from.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card role="region" aria-label="Reviews each month">
+      <h2 className="text-h3 font-semibold">Reviews each month</h2>
+      <div className="mt-2">
+        <ReviewsChart
+          months={activity.months}
+          reviews={activity.reviews_by_month}
+          sentence={activity.note}
+          caption="Reviews received by month"
+        />
+      </div>
+    </Card>
+  );
+}
+
+function ServicesTable({ dashboard }: { dashboard: Dashboard }) {
+  if (dashboard.services.length === 0) {
+    return (
+      <Card>
+        <h2 className="text-h3 font-semibold">Your services</h2>
+        <div className="mt-4">
+          <EmptyState
+            title="You have no services yet"
+            action={
+              <ButtonLink href="/dashboard/add-service" small>
+                Add a service
+              </ButtonLink>
+            }
+          >
+            Add what you offer and we will suggest a price for it.
+          </EmptyState>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card role="region" aria-label="Your services">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-h3 font-semibold">Your services</h2>
+        <ButtonLink href="/dashboard/add-service" variant="quiet" small>
+          Add a service
+        </ButtonLink>
+      </div>
+
+      <div
+        className="mt-4 max-w-full overflow-x-auto"
+        tabIndex={0}
+        role="group"
+        aria-label="Your services"
+      >
+        <table className="w-full border-collapse text-[0.9375rem]">
+          <caption className="px-3 py-2 text-left text-small text-ink-500">
+            What you charge for each service, what we suggested, and what you decided.
+          </caption>
+          <thead>
+            <tr>
+              {["Service", "People", "Your price", "Suggested", "Decision"].map(
+                (column) => (
+                  <th
+                    key={column}
+                    scope="col"
+                    className="border-b border-line px-3 py-2.5 text-left text-overline uppercase text-ink-500"
+                  >
+                    {column}
+                  </th>
+                ),
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {dashboard.services.map((service) => {
+              const latest = service.latest_recommendation;
+              /*
+               * What the mentor decided about the latest price.
+               *
+               * This response reports the decision beside each price rather
+               * than on it, so the recommendation here carries no decision of
+               * its own: the answer is its status, and the price the mentor
+               * settled on is the last point on the timeline, which runs
+               * oldest first. Read in that order, with the decision on the
+               * recommendation first for the day it is filled in.
+               */
+              const timeline = service.timeline;
+              const last = timeline.length > 0 ? timeline[timeline.length - 1] : null;
+              const decision = latest?.decision ?? null;
+              const action =
+                decision?.action ?? last?.action ?? latest?.status ?? "pending";
+              const settledPrice =
+                decision?.final_price ?? last?.final_price ?? service.current_price;
+              return (
+                <tr key={service.service_id} className="even:bg-surface-sunk">
+                  <td className="border-b border-line px-3 py-3">
+                    {service.field_label}
+                  </td>
+                  <td className="tabular border-b border-line px-3 py-3">
+                    {service.max_mentees}
+                  </td>
+                  <td className="tabular border-b border-line px-3 py-3">
+                    {formatMoney(service.current_price)}
+                  </td>
+                  <td className="tabular border-b border-line px-3 py-3">
+                    {latest ? formatMoney(latest.recommended_price) : "Not yet"}
+                  </td>
+                  <td className="border-b border-line px-3 py-3">
+                    {action === "accepted" ? (
+                      <Chip tone="accepted" icon={<CheckIcon />}>
+                        {decisionWord(action)}
+                      </Chip>
+                    ) : action === "rejected" ? (
+                      <Chip tone="declined">{decisionWord(action)}</Chip>
+                    ) : action === "modified" ? (
+                      <Chip tone="neutral">
+                        {decisionWord(action)} to {formatMoney(settledPrice)}
+                      </Chip>
+                    ) : (
+                      <Chip tone="neutral">{decisionWord(action)}</Chip>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function DashboardScreen({ mentor }: { mentor: Mentor }) {
+  const dashboard = useAsync(
+    (signal) => api.dashboard(mentor.id, signal),
+    `dashboard-${mentor.id}`,
+  );
+  const activity = useAsync(
+    (signal) => api.activity(mentor.id, signal),
+    `activity-${mentor.id}`,
+  );
+
+  const stats = reviewStats(
+    activity.data?.months ?? [],
+    activity.data?.reviews_by_month ?? [],
+  );
+
+  return (
+    <>
+      <Banner
+        title={`Hello, ${firstNameOf(mentor.full_name)}`}
+        lead="Here is what you charge, how it compares, and how your reviews have come in."
+        action={
+          <ButtonLink href="/dashboard/add-service" variant="white">
+            Add a service
+          </ButtonLink>
+        }
+      />
+
+      <Column wide className="py-10">
+        {dashboard.status === "loading" ? (
+          <LoadingBlock label="Loading your page" />
+        ) : null}
+
+        {dashboard.status === "error" ? (
+          <ErrorNotice
+            message={messageFor(dashboard.error)}
+            onRetry={dashboard.reload}
+          />
+        ) : null}
+
+        {dashboard.status === "ready" && dashboard.data ? (
+          <div className="grid gap-6">
+            {dashboard.data.services.length === 0 ? (
+              <EmptyState
+                title="You have not added a service yet"
+                action={
+                  <ButtonLink href="/dashboard/add-service">
+                    Add your first service
+                  </ButtonLink>
+                }
+              >
+                Tell us what you offer and we will suggest a price for it. Your figures
+                and your comparison appear here once you have one.
+              </EmptyState>
+            ) : (
+              <>
+                <HeadlineStatistics
+                  dashboard={dashboard.data}
+                  activity={activity.data}
+                  stats={stats}
+                />
+                <HowYouCompare dashboard={dashboard.data} />
+                <ReviewsSection activity={activity.data} />
+              </>
+            )}
+            <ServicesTable dashboard={dashboard.data} />
+          </div>
+        ) : null}
+      </Column>
+    </>
+  );
+}
+
+export default function DashboardPage() {
+  return <RequireAuth>{(mentor) => <DashboardScreen mentor={mentor} />}</RequireAuth>;
 }

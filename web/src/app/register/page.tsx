@@ -1,464 +1,436 @@
 "use client";
 
 /**
- * Registration, in three steps.
+ * Register: calm, with a banner.
  *
- * The steps are grouped by what the answers are for, not by how many fit on a
- * screen: who you are, what mentees will read about you, and what sets your
- * price. The third step says so in its heading, because the second step's
- * answers are stored and shown and never priced, and a mentor who assumes
- * their degree moved the number would be wrong.
+ * One long page rather than a stepper, so a mentor can see how much is left,
+ * with the live price preview beside it. Four parts: the account, what they
+ * offer, the skills they cover, and an optional collapsed section for the
+ * three profile fields that are shown on their card and never priced.
  *
- * There is no password field. The API has no authentication yet, so a
- * password box would be collecting something nothing checks.
+ * Every option list comes from /meta/options. The only part of the skill list
+ * this file decides is which of the four headings each skill is read under,
+ * and that lives in lib/copy.ts with a test that none can go missing.
+ *
+ * The answers live in one component with the preview panel, so the figure
+ * beside the form is worked out from the same state the form submits.
  */
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  FormErrorSummary,
-  ProgressSteps,
+  ErrorSummary,
+  PillCheckbox,
   SelectInput,
-  TextArea,
+  Stepper,
   TextInput,
+  type SummaryProblem,
 } from "@/components/form";
+import { PricePreview } from "@/components/price-preview";
 import {
-  ServiceFields,
-  type ServiceFormState,
-  emptyServiceState,
-  servicePayload,
-  validateService,
-} from "@/components/service-fields";
-import { Button, Card, ErrorNotice, LoadingBlock, PageHeading } from "@/components/ui";
+  Banner,
+  Button,
+  Column,
+  ErrorNotice,
+  LoadingBlock,
+  TextLink,
+} from "@/components/ui";
 import { api } from "@/lib/api-client";
 import type { OptionsResponse } from "@/lib/api-types";
+import { SKILL_GROUPS, UNVERIFIED_AFTER_SUBMIT } from "@/lib/copy";
 import { ApiError, messageFor, toFieldErrors } from "@/lib/errors";
-import { writeMentorId } from "@/lib/mentor-session";
+import { setMentor } from "@/lib/session";
+import { writeToken } from "@/lib/token";
 import { useAsync } from "@/lib/use-async";
 
-const STEP_NAMES = ["Account", "Profile", "Your service"];
+const PASSWORD_MIN = 8;
 
-/**
- * Which step an answer belongs to.
- *
- * Used when the API refuses a submission: the mentor is taken back to the
- * earliest step that has something wrong on it, rather than being left on the
- * last step reading about a field they cannot see.
- */
-const STEP_OF_FIELD: Record<string, number> = {
-  full_name: 0,
-  email: 0,
-  headline: 1,
-  bio: 1,
-  education_level: 1,
-  experience_summary: 1,
-  credentials: 1,
-  years_mentoring_band: 1,
-  services_planned: 2,
-  "service.field": 2,
-  "service.max_mentees": 2,
-  "service.min_commitment": 2,
-  "service.skills": 2,
-  "service.profile_verified": 2,
+interface Answers {
+  name: string;
+  email: string;
+  password: string;
+  field: string;
+  maxMentees: number;
+  skills: string[];
+  yearsExperience: string;
+  educationLevel: string;
+  credentials: string;
+}
+
+const EMPTY: Answers = {
+  name: "",
+  email: "",
+  password: "",
+  field: "",
+  maxMentees: 1,
+  skills: [],
+  yearsExperience: "",
+  educationLevel: "",
+  credentials: "",
 };
 
-interface AccountState {
-  fullName: string;
-  email: string;
+/** The id of the input each message jumps to, keyed as the API names it. */
+const FIELD_IDS: Record<string, string> = {
+  name: "register-name",
+  email: "register-email",
+  password: "register-password",
+  field: "register-field",
+  max_mentees: "register-group-size",
+  skills: "register-skills",
+  years_experience: "register-years",
+  education_level: "register-education",
+  credentials: "register-credentials",
+};
+
+/** What this application can tell is wrong before it asks the API. */
+/** The answers that live inside the optional section. */
+const OPTIONAL_FIELDS = ["years_experience", "education_level", "credentials"];
+
+function localProblems(
+  answers: Answers,
+  bounds: { min: number; max: number },
+): Record<string, string> {
+  const problems: Record<string, string> = {};
+  if (answers.name.trim().length < 2) {
+    problems.name = "Tell us the name mentees will see.";
+  }
+  if (!answers.email.trim()) {
+    problems.email = "Enter an email address so you can log back in.";
+  } else if (!answers.email.includes("@")) {
+    problems.email = "Enter an email address we can reach you at.";
+  }
+  if (answers.password.length < PASSWORD_MIN) {
+    problems.password = `Choose a password of at least ${PASSWORD_MIN} characters.`;
+  }
+  if (!answers.field) {
+    problems.field = "Choose the field you mentor in most.";
+  }
+  if (answers.yearsExperience) {
+    const years = Number(answers.yearsExperience);
+    if (!Number.isInteger(years) || years < bounds.min || years > bounds.max) {
+      problems.years_experience = `Give a whole number of years between ${bounds.min} and ${bounds.max}, or leave it blank.`;
+    }
+  }
+  return problems;
 }
 
-interface ProfileState {
-  headline: string;
-  bio: string;
-  educationLevel: string;
-  experienceSummary: string;
-  credentials: string;
-  yearsMentoringBand: string;
-}
-
-const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-function validateAccount(state: AccountState): Record<string, string> {
-  const errors: Record<string, string> = {};
-  if (state.fullName.trim().length < 2) {
-    errors.full_name = "Enter your full name.";
-  }
-  if (!EMAIL_SHAPE.test(state.email.trim())) {
-    errors.email = "Enter an email address we can reach you at.";
-  }
-  return errors;
-}
-
-function validateProfile(state: ProfileState): Record<string, string> {
-  const errors: Record<string, string> = {};
-  if (!state.headline.trim()) {
-    errors.headline = "Write one line about what you help mentees with.";
-  }
-  if (!state.bio.trim()) {
-    errors.bio = "Write a short bio for your profile.";
-  }
-  if (!state.educationLevel) {
-    errors.education_level = "Choose your highest level of education.";
-  }
-  if (!state.experienceSummary.trim()) {
-    errors.experience_summary = "Say a little about your professional experience.";
-  }
-  if (!state.yearsMentoringBand) {
-    errors.years_mentoring_band = "Choose how long you have been mentoring.";
-  }
-  return errors;
-}
-
-export default function RegisterPage() {
+function Registration({ options }: { options: OptionsResponse }) {
   const router = useRouter();
-  const options = useAsync<OptionsResponse>((signal) => api.options(signal), "options");
-
-  if (options.status === "loading") {
-    return <LoadingBlock label="Loading the registration form" />;
-  }
-  if (options.status === "error" || options.data === null) {
-    return <ErrorNotice message={messageFor(options.error)} onRetry={options.reload} />;
-  }
-
-  return (
-    <RegistrationForm options={options.data} onDone={(path) => router.push(path)} />
-  );
-}
-
-function RegistrationForm({
-  options,
-  onDone,
-}: {
-  options: OptionsResponse;
-  onDone: (path: string) => void;
-}) {
-  const [step, setStep] = useState(0);
-  const [account, setAccount] = useState<AccountState>({ fullName: "", email: "" });
-  const [profile, setProfile] = useState<ProfileState>({
-    headline: "",
-    bio: "",
-    educationLevel: "",
-    experienceSummary: "",
-    credentials: "",
-    yearsMentoringBand: "",
-  });
-  const [service, setService] = useState<ServiceFormState>(() =>
-    emptyServiceState(options),
-  );
-  const [servicesPlanned, setServicesPlanned] = useState("1");
-
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [general, setGeneral] = useState<string[]>([]);
+  const [answers, setAnswers] = useState<Answers>(EMPTY);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [submitted, setSubmitted] = useState(false);
   const [sending, setSending] = useState(false);
+  const [fromApi, setFromApi] = useState<{
+    fields: Record<string, string>;
+    general: string[];
+  }>({ fields: {}, general: [] });
 
-  const summaryRef = useRef<HTMLDivElement | null>(null);
-  const movedToSummary = useRef(false);
+  const summaryRef = useRef<HTMLDivElement>(null);
+  const [summarySignal, setSummarySignal] = useState(0);
+  /*
+   * Whether the optional section is open.
+   *
+   * It starts closed, because nothing in it is required, and it is forced
+   * open by a failed submit that found a problem inside it: an error nobody
+   * can see is an error nobody can fix.
+   */
+  const [optionalOpen, setOptionalOpen] = useState(false);
 
-  // Focus the summary only when there is one, and only once per appearance,
-  // so a mentor correcting a field is not dragged back up the page.
+  const skillLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const skill of options.skills) {
+      labels.set(skill.id, skill.label);
+    }
+    return labels;
+  }, [options.skills]);
+
+  const problems = {
+    ...localProblems(answers, options.years_experience),
+    ...fromApi.fields,
+  };
+
+  const show = (name: string): string | null =>
+    touched[name] || submitted ? (problems[name] ?? null) : null;
+
+  const summary: SummaryProblem[] = submitted
+    ? Object.entries(problems).map(([name, message]) => ({
+        id: FIELD_IDS[name] ?? FIELD_IDS.name,
+        message,
+      }))
+    : [];
+
+  const generalProblems: SummaryProblem[] = fromApi.general.map((message) => ({
+    id: FIELD_IDS.name,
+    message,
+  }));
+
   useEffect(() => {
-    if (general.length > 0 && !movedToSummary.current) {
+    if (summarySignal > 0) {
       summaryRef.current?.focus();
-      movedToSummary.current = true;
     }
-    if (general.length === 0) {
-      movedToSummary.current = false;
-    }
-  }, [general]);
+  }, [summarySignal]);
 
-  const clearError = useCallback((name: string) => {
-    setErrors((current) => {
-      if (!(name in current)) {
-        return current;
+  function update<K extends keyof Answers>(key: K, value: Answers[K]) {
+    setAnswers((was) => ({ ...was, [key]: value }));
+    setFromApi({ fields: {}, general: [] });
+  }
+
+  function toggleSkill(id: string, on: boolean) {
+    setAnswers((was) => ({
+      ...was,
+      skills: on ? [...was.skills, id] : was.skills.filter((skill) => skill !== id),
+    }));
+  }
+
+  async function onSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setSubmitted(true);
+    setFromApi({ fields: {}, general: [] });
+
+    const found = localProblems(answers, options.years_experience);
+    if (Object.keys(found).length > 0) {
+      if (Object.keys(found).some((name) => OPTIONAL_FIELDS.includes(name))) {
+        setOptionalOpen(true);
       }
-      const next = { ...current };
-      delete next[name];
-      return next;
-    });
-  }, []);
-
-  function errorsForStep(index: number): Record<string, string> {
-    if (index === 0) {
-      return validateAccount(account);
-    }
-    if (index === 1) {
-      return validateProfile(profile);
-    }
-    return validateService(service, "service.");
-  }
-
-  function goNext() {
-    const found = errorsForStep(step);
-    setErrors(found);
-    if (Object.keys(found).length > 0) {
-      setGeneral(["Some answers on this step still need filling in."]);
-      return;
-    }
-    setGeneral([]);
-    setStep((current) => Math.min(STEP_NAMES.length - 1, current + 1));
-  }
-
-  function goBack() {
-    setGeneral([]);
-    setErrors({});
-    setStep((current) => Math.max(0, current - 1));
-  }
-
-  async function submit() {
-    const found = {
-      ...validateAccount(account),
-      ...validateProfile(profile),
-      ...validateService(service, "service."),
-    };
-    if (Object.keys(found).length > 0) {
-      setErrors(found);
-      const earliest = Math.min(
-        ...Object.keys(found).map((name) => STEP_OF_FIELD[name] ?? 0),
-      );
-      setStep(earliest);
-      setGeneral(["Some answers still need filling in before we can suggest a price."]);
+      setSummarySignal((count) => count + 1);
       return;
     }
 
     setSending(true);
-    setErrors({});
-    setGeneral([]);
     try {
-      const result = await api.register({
-        full_name: account.fullName.trim(),
-        email: account.email.trim(),
-        years_mentoring_band: profile.yearsMentoringBand,
-        services_planned: Number.parseInt(servicesPlanned, 10),
-        headline: profile.headline.trim() || null,
-        bio: profile.bio.trim() || null,
-        education_level: profile.educationLevel || null,
-        experience_summary: profile.experienceSummary.trim() || null,
-        credentials: profile.credentials.trim() || null,
-        service: servicePayload(service),
+      const answer = await api.register({
+        name: answers.name.trim(),
+        email: answers.email.trim(),
+        password: answers.password,
+        field: answers.field,
+        max_mentees: answers.maxMentees,
+        skills: answers.skills,
+        min_commitment: options.min_commitment_default,
+        years_experience: answers.yearsExperience
+          ? Number(answers.yearsExperience)
+          : null,
+        education_level: answers.educationLevel || null,
+        credentials: answers.credentials.trim() || null,
       });
-      writeMentorId(result.mentor.id, result.mentor.full_name);
-      onDone(`/recommendation/${result.recommendation.id}`);
+      writeToken(answer.access_token);
+      setMentor(answer.mentor);
+      router.push(`/recommendation/${answer.recommendation.id}`);
     } catch (error) {
-      if (error instanceof ApiError && error.fieldErrors.length > 0) {
-        const mapped = toFieldErrors(error.fieldErrors, error.detail);
-        setErrors(mapped.fields);
-        setGeneral(mapped.general.length > 0 ? mapped.general : [error.detail]);
-        const named = Object.keys(mapped.fields);
-        if (named.length > 0) {
-          setStep(Math.min(...named.map((name) => STEP_OF_FIELD[name] ?? 0)));
-        }
-      } else {
-        setGeneral([messageFor(error)]);
+      const mapped =
+        error instanceof ApiError
+          ? toFieldErrors(error.fieldErrors, error.detail)
+          : { fields: {}, general: [messageFor(error)] };
+      if (Object.keys(mapped.fields).some((name) => OPTIONAL_FIELDS.includes(name))) {
+        setOptionalOpen(true);
       }
+      setFromApi(mapped);
       setSending(false);
+      setSummarySignal((count) => count + 1);
     }
   }
 
-  const lastStep = step === STEP_NAMES.length - 1;
+  return (
+    <div className="grid items-start gap-8 wide:grid-cols-[minmax(0,1fr)_360px]">
+      <form onSubmit={onSubmit} noValidate>
+        <ErrorSummary ref={summaryRef} problems={[...generalProblems, ...summary]} />
+
+        <section className="mb-6 rounded-card border border-line bg-surface p-6">
+          <h2 className="text-h3 font-semibold">Your account</h2>
+          <p className="text-small text-ink-500">So you can log back in.</p>
+          <div className="grid gap-4 mid:grid-cols-2">
+            <TextInput
+              id={FIELD_IDS.name}
+              label="Full name"
+              autoComplete="name"
+              placeholder="e.g. Amara Njoroge"
+              value={answers.name}
+              onChange={(event) => update("name", event.target.value)}
+              onBlur={() => setTouched((was) => ({ ...was, name: true }))}
+              error={show("name")}
+            />
+            <TextInput
+              id={FIELD_IDS.email}
+              label="Email"
+              type="email"
+              autoComplete="email"
+              placeholder="you@example.com"
+              value={answers.email}
+              onChange={(event) => update("email", event.target.value)}
+              onBlur={() => setTouched((was) => ({ ...was, email: true }))}
+              error={show("email")}
+            />
+          </div>
+          <TextInput
+            id={FIELD_IDS.password}
+            label="Password"
+            type="password"
+            autoComplete="new-password"
+            helper={`At least ${PASSWORD_MIN} characters.`}
+            value={answers.password}
+            onChange={(event) => update("password", event.target.value)}
+            onBlur={() => setTouched((was) => ({ ...was, password: true }))}
+            error={show("password")}
+          />
+        </section>
+
+        <section className="mb-6 rounded-card border border-line bg-surface p-6">
+          <h2 className="text-h3 font-semibold">What you offer</h2>
+          <p className="text-small text-ink-500">
+            This does most of the work in your price.
+          </p>
+          <SelectInput
+            id={FIELD_IDS.field}
+            label="Your field"
+            helper="The area you mentor in most."
+            placeholder="Choose a field"
+            options={options.fields}
+            value={answers.field}
+            onChange={(event) => update("field", event.target.value)}
+            onBlur={() => setTouched((was) => ({ ...was, field: true }))}
+            error={show("field")}
+          />
+          <Stepper
+            id={FIELD_IDS.max_mentees}
+            label="How many people per session?"
+            helper={`Choose 1 for one to one. Up to ${options.max_mentees.max} for a group.`}
+            value={answers.maxMentees}
+            min={options.max_mentees.min}
+            max={options.max_mentees.max}
+            onChange={(next) => update("maxMentees", next)}
+            describe={(value) => (value === 1 ? "1 person" : `${value} people`)}
+            error={show("max_mentees")}
+          />
+        </section>
+
+        <section
+          id={FIELD_IDS.skills}
+          className="mb-6 rounded-card border border-line bg-surface p-6"
+        >
+          <h2 className="text-h3 font-semibold">Skills you cover</h2>
+          <p className="text-small text-ink-500">
+            Tick everything that applies. Covering more skills slightly raises the
+            suggestion.
+          </p>
+          {show("skills") ? (
+            <p role="alert" className="mt-2 text-small text-danger-700">
+              {show("skills")}
+            </p>
+          ) : null}
+          {SKILL_GROUPS.map((group) => (
+            <fieldset key={group.name} className="mt-5 min-w-0">
+              <legend className="mb-2.5 text-overline uppercase text-ink-500">
+                {group.name}
+              </legend>
+              <div className="flex flex-wrap gap-2">
+                {group.skillIds
+                  .filter((id) => skillLabels.has(id))
+                  .map((id) => (
+                    <PillCheckbox
+                      key={id}
+                      label={skillLabels.get(id) ?? id}
+                      checked={answers.skills.includes(id)}
+                      onChange={(on) => toggleSkill(id, on)}
+                    />
+                  ))}
+              </div>
+            </fieldset>
+          ))}
+        </section>
+
+        <details
+          className="group mb-6 rounded-card border border-line bg-surface"
+          open={optionalOpen}
+          onToggle={(event) => setOptionalOpen(event.currentTarget.open)}
+        >
+          <summary className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 px-6 py-5">
+            <span>
+              <span className="block text-h3 font-semibold">More about you</span>
+              <span className="block text-small text-ink-500">
+                Optional. Adds to your public profile. Shown on your card, not used in
+                the price.
+              </span>
+            </span>
+            <span
+              aria-hidden="true"
+              className="h-2.5 w-2.5 flex-none rotate-45 border-b-2 border-r-2 border-ink-700 transition-transform duration-[180ms] ease-entrance group-open:-rotate-[135deg]"
+            />
+          </summary>
+          <div className="px-6 pb-6">
+            <div className="grid gap-4 mid:grid-cols-2">
+              <TextInput
+                id={FIELD_IDS.years_experience}
+                label="Years of experience"
+                type="number"
+                inputMode="numeric"
+                min={options.years_experience.min}
+                max={options.years_experience.max}
+                placeholder="e.g. 8"
+                value={answers.yearsExperience}
+                onChange={(event) => update("yearsExperience", event.target.value)}
+                onBlur={() => setTouched((was) => ({ ...was, years_experience: true }))}
+                error={show("years_experience")}
+              />
+              <SelectInput
+                id={FIELD_IDS.education_level}
+                label="Education"
+                placeholder="Prefer not to say"
+                options={options.education_levels}
+                value={answers.educationLevel}
+                onChange={(event) => update("educationLevel", event.target.value)}
+                error={show("education_level")}
+              />
+            </div>
+            <TextInput
+              id={FIELD_IDS.credentials}
+              label="Credentials"
+              placeholder="e.g. Certified coach, CPA"
+              value={answers.credentials}
+              onChange={(event) => update("credentials", event.target.value)}
+              error={show("credentials")}
+            />
+          </div>
+        </details>
+
+        <Button type="submit" disabled={sending} aria-busy={sending}>
+          {sending ? "Working out your price" : "See my suggested price"}
+        </Button>
+        <p className="mt-3 text-small text-ink-500">{UNVERIFIED_AFTER_SUBMIT}</p>
+        <p className="mt-3 text-small">
+          Already registered? <TextLink href="/login">Log in instead</TextLink>
+        </p>
+      </form>
+
+      <aside aria-label="Live price preview" className="wide:sticky wide:top-4">
+        <PricePreview
+          field={answers.field}
+          maxMentees={answers.maxMentees}
+          skills={answers.skills}
+        />
+      </aside>
+    </div>
+  );
+}
+
+export default function RegisterPage() {
+  const { status, data, error, reload } = useAsync(
+    (signal) => api.options(signal),
+    "register-options",
+  );
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <PageHeading
-        title="Become a mentor"
-        lead="Three short steps. The last one ends with a suggested price for your first service."
+    <>
+      <Banner
+        title="Create your mentor profile"
+        lead="Four short parts. We use them to suggest a price. You can change anything later."
       />
-
-      <Card>
-        <ProgressSteps steps={STEP_NAMES} current={step} />
-
-        <div ref={summaryRef} tabIndex={-1}>
-          <FormErrorSummary messages={general} />
-        </div>
-
-        <form
-          className="mt-4 space-y-6"
-          // The browser's own validation is turned off on purpose. The email
-          // box is type="email", and left to itself the browser refuses the
-          // submission before onSubmit runs and shows a tooltip of its own,
-          // which is not tied to the field, disappears on the next click and
-          // is worded by the browser rather than by us. With noValidate the
-          // messages this form writes are the only ones a mentor sees, and
-          // each one is tied to its field with aria-describedby.
-          noValidate
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (lastStep) {
-              void submit();
-            } else {
-              goNext();
-            }
-          }}
-        >
-          {step === 0 ? (
-            <fieldset className="space-y-6">
-              <legend className="sr-only">Account</legend>
-              <h2 className="text-lg font-semibold">Your account</h2>
-              <TextInput
-                label="Full name"
-                name="full_name"
-                value={account.fullName}
-                autoComplete="name"
-                maxLength={200}
-                error={errors.full_name}
-                onChange={(value) => {
-                  clearError("full_name");
-                  setAccount({ ...account, fullName: value });
-                }}
-              />
-              <TextInput
-                label="Email address"
-                name="email"
-                type="email"
-                autoComplete="email"
-                maxLength={320}
-                value={account.email}
-                error={errors.email}
-                hint="We use it to find your account. There is no password yet."
-                onChange={(value) => {
-                  clearError("email");
-                  setAccount({ ...account, email: value });
-                }}
-              />
-            </fieldset>
-          ) : null}
-
-          {step === 1 ? (
-            <fieldset className="space-y-6">
-              <legend className="sr-only">Profile</legend>
-              <div>
-                <h2 className="text-lg font-semibold">Your profile</h2>
-                <p className="mt-1 text-sm text-ink-muted">
-                  This is what mentees read. None of it is used to work out your price.
-                </p>
-              </div>
-              <TextInput
-                label="Headline"
-                name="headline"
-                maxLength={300}
-                value={profile.headline}
-                error={errors.headline}
-                placeholder="Helping graduate engineers find their first role"
-                onChange={(value) => {
-                  clearError("headline");
-                  setProfile({ ...profile, headline: value });
-                }}
-              />
-              <TextArea
-                label="Short bio"
-                name="bio"
-                maxLength={4000}
-                value={profile.bio}
-                error={errors.bio}
-                hint="A few sentences about who you are and who you help."
-                onChange={(value) => {
-                  clearError("bio");
-                  setProfile({ ...profile, bio: value });
-                }}
-              />
-              <SelectInput
-                label="Highest education"
-                name="education_level"
-                placeholder="Choose your highest level"
-                value={profile.educationLevel}
-                options={options.education_levels}
-                error={errors.education_level}
-                onChange={(value) => {
-                  clearError("education_level");
-                  setProfile({ ...profile, educationLevel: value });
-                }}
-              />
-              <TextArea
-                label="Professional experience"
-                name="experience_summary"
-                rows={3}
-                maxLength={4000}
-                value={profile.experienceSummary}
-                error={errors.experience_summary}
-                onChange={(value) => {
-                  clearError("experience_summary");
-                  setProfile({ ...profile, experienceSummary: value });
-                }}
-              />
-              <TextArea
-                label="Credentials"
-                name="credentials"
-                rows={2}
-                optional
-                maxLength={4000}
-                value={profile.credentials}
-                error={errors.credentials}
-                hint="Licences, memberships or certifications, if you have them."
-                onChange={(value) => {
-                  clearError("credentials");
-                  setProfile({ ...profile, credentials: value });
-                }}
-              />
-              <SelectInput
-                label="Years of mentoring experience"
-                name="years_mentoring_band"
-                placeholder="Choose a range"
-                value={profile.yearsMentoringBand}
-                options={options.years_mentoring_bands}
-                error={errors.years_mentoring_band}
-                hint="Shown on your profile. It does not change your price."
-                onChange={(value) => {
-                  clearError("years_mentoring_band");
-                  setProfile({ ...profile, yearsMentoringBand: value });
-                }}
-              />
-            </fieldset>
-          ) : null}
-
-          {step === 2 ? (
-            <fieldset className="space-y-6">
-              <legend className="sr-only">Your service</legend>
-              <div>
-                <h2 className="text-lg font-semibold">Your service</h2>
-                <p className="mt-1 text-sm text-ink-muted">
-                  These are the answers that set your price.
-                </p>
-              </div>
-              <ServiceFields
-                options={options}
-                state={service}
-                onChange={(next) => {
-                  setErrors({});
-                  setService(next);
-                }}
-                errors={errors}
-                prefix="service."
-                servicesPlanned={servicesPlanned}
-                onServicesPlannedChange={(value) => {
-                  clearError("services_planned");
-                  setServicesPlanned(value);
-                }}
-                servicesPlannedError={errors.services_planned}
-              />
-            </fieldset>
-          ) : null}
-
-          <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
-            {step > 0 ? (
-              <Button tone="quiet" onClick={goBack} disabled={sending}>
-                Back
-              </Button>
-            ) : null}
-            <Button type="submit" disabled={sending}>
-              {lastStep
-                ? sending
-                  ? "Working out your price"
-                  : "Suggest my price"
-                : "Continue"}
-            </Button>
-            {sending ? (
-              <p aria-live="polite" className="text-sm text-ink-soft">
-                Sending your answers.
-              </p>
-            ) : null}
-          </div>
-        </form>
-      </Card>
-    </div>
+      <Column wide className="py-10">
+        {status === "loading" ? <LoadingBlock label="Loading the form" /> : null}
+        {status === "error" ? (
+          <ErrorNotice message={messageFor(error)} onRetry={reload} />
+        ) : null}
+        {status === "ready" && data ? <Registration options={data} /> : null}
+      </Column>
+    </>
   );
 }

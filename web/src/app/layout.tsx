@@ -1,19 +1,40 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Inter_Tight, Playfair_Display } from "next/font/google";
 import type { ReactNode } from "react";
 
+import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
-import { BRAND } from "@/lib/copy";
+import { BRAND, TAGLINE } from "@/lib/copy";
 
 import "./globals.css";
 
 /**
- * One typeface, loaded through next/font so it is served from this origin and
- * does not shift the page while it arrives.
+ * Three families, loaded through next/font so they are served from this
+ * origin and cost no layout shift. One variable each, applied on <html>.
+ *
+ * Inter Tight is the headline voice, Inter is everything else, and Playfair
+ * Display italic is the one accent word in a display heading. All three are
+ * variable fonts, so one file per family covers every weight used.
  */
+const display = Inter_Tight({
+  subsets: ["latin"],
+  weight: ["800"],
+  variable: "--font-display",
+  display: "swap",
+});
+
 const sans = Inter({
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
   variable: "--font-sans",
+  display: "swap",
+});
+
+const accent = Playfair_Display({
+  subsets: ["latin"],
+  weight: ["500"],
+  style: ["italic"],
+  variable: "--font-accent",
   display: "swap",
 });
 
@@ -22,8 +43,7 @@ export const metadata: Metadata = {
     default: BRAND,
     template: `%s | ${BRAND}`,
   },
-  description:
-    "Suggested session prices for mentors, based on what mentors like you charge. The suggestion is advice: you decide what to charge.",
+  description: TAGLINE,
 };
 
 export const viewport: Viewport = {
@@ -33,8 +53,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en-AU" className={sans.variable}>
-      <body className="flex min-h-dvh flex-col">
+    <html
+      lang="en-AU"
+      className={`${display.variable} ${sans.variable} ${accent.variable}`}
+    >
+      <body className="flex min-h-dvh flex-col bg-surface text-ink-900">
         {/* The first thing in the tab order, for anyone who does not want to
             walk through the header on every page. */}
         <a
@@ -44,17 +67,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           Skip to main content
         </a>
         <SiteHeader />
-        <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">
+        <main id="main" className="flex-1">
           {children}
         </main>
-        <footer className="border-t border-line bg-white">
-          <div className="mx-auto max-w-5xl px-4 py-6 text-sm text-ink-soft sm:px-6">
-            <p>
-              {BRAND}. Every suggested price is advice, in Australian dollars. You
-              decide what to charge.
-            </p>
-          </div>
-        </footer>
+        <SiteFooter />
       </body>
     </html>
   );

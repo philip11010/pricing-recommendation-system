@@ -1,323 +1,73 @@
 "use client";
 
 /**
- * The form controls, built once so every field behaves the same way.
+ * Every field in the product, built the same way.
  *
- * Three things every control here does, because a mentor filling in a form is
- * the one place this application cannot afford to be clever:
+ * Top to bottom, always in this order: a visible label bound to the input,
+ * helper text above the input so it is read before the field is answered, the
+ * input itself, and a message under it tied to the input with
+ * aria-describedby. A placeholder is never the label.
  *
- * * The label is a real label element tied to the input, so tapping the words
- *   focuses the field and a screen reader reads the two together.
- * * A message about a field is tied to it with aria-describedby and marked
- *   aria-invalid, so it is read out rather than merely drawn in red.
- * * Every target is at least 44 pixels high, which is what a thumb needs.
+ * A fixed height slot is reserved for the message, so showing one does not
+ * push the rest of the form down.
  */
 
-import type { KeyboardEvent, ReactNode } from "react";
-import { useId } from "react";
+import {
+  forwardRef,
+  useId,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+} from "react";
 
+import { WarningIcon } from "@/components/ui";
 import type { Option } from "@/lib/api-types";
-import { formatMentees } from "@/lib/format";
 
-const CONTROL =
-  "min-h-[44px] w-full rounded-xl border bg-white px-3.5 py-2.5 text-base text-ink placeholder:text-ink-soft";
+const INPUT_CLASS =
+  "w-full min-h-[44px] rounded-field border border-line bg-surface px-3.5 py-2.5 text-base text-ink-900 hover:border-line-strong disabled:bg-surface-sunk";
 
-function controlClasses(invalid: boolean): string {
-  return `${CONTROL} ${invalid ? "border-caution-700" : "border-line"}`;
-}
-
-function Describers({
-  hintId,
-  errorId,
-  hint,
+export function FieldShell({
+  id,
+  label,
+  helper,
   error,
-}: {
-  hintId: string;
-  errorId: string;
-  hint?: ReactNode;
-  error?: string;
-}) {
-  return (
-    <>
-      {hint ? (
-        <p id={hintId} className="mt-1 text-sm text-ink-soft">
-          {hint}
-        </p>
-      ) : null}
-      {error ? (
-        // role="alert" as well as aria-describedby: the description is read
-        // when the field is reached, and the alert is read when the message
-        // appears, which is what a mentor who pressed Continue needs.
-        <p
-          id={errorId}
-          role="alert"
-          className="mt-1.5 text-sm font-medium text-caution-700"
-        >
-          {error}
-        </p>
-      ) : null}
-    </>
-  );
-}
-
-function describedBy(
-  hintId: string,
-  errorId: string,
-  hint?: ReactNode,
-  error?: string,
-): string | undefined {
-  const ids = [hint ? hintId : null, error ? errorId : null].filter(Boolean);
-  return ids.length > 0 ? ids.join(" ") : undefined;
-}
-
-export function FieldLabel({
-  htmlFor,
   children,
-  optional,
+  labelFor = true,
 }: {
-  htmlFor: string;
+  id: string;
+  label: ReactNode;
+  helper?: ReactNode;
+  error?: string | null;
   children: ReactNode;
-  optional?: boolean;
+  /** False where the control is a group rather than one input. */
+  labelFor?: boolean;
 }) {
-  return (
-    <label htmlFor={htmlFor} className="block text-sm font-semibold text-ink">
-      {children}
-      {optional ? (
-        <span className="ml-1 font-normal text-ink-soft">(optional)</span>
-      ) : null}
-    </label>
-  );
-}
-
-interface TextProps {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  error?: string;
-  hint?: ReactNode;
-  optional?: boolean;
-  placeholder?: string;
-  maxLength?: number;
-  type?: "text" | "email";
-  autoComplete?: string;
-  name?: string;
-}
-
-export function TextInput({
-  label,
-  value,
-  onChange,
-  error,
-  hint,
-  optional,
-  placeholder,
-  maxLength,
-  type = "text",
-  autoComplete,
-  name,
-}: TextProps) {
-  const id = useId();
-  const hintId = `${id}-hint`;
+  const helperId = `${id}-helper`;
   const errorId = `${id}-error`;
   return (
-    <div>
-      <FieldLabel htmlFor={id} optional={optional}>
-        {label}
-      </FieldLabel>
-      <input
-        id={id}
-        name={name}
-        type={type}
-        className={`mt-1.5 ${controlClasses(Boolean(error))}`}
-        value={value}
-        placeholder={placeholder}
-        maxLength={maxLength}
-        autoComplete={autoComplete}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy(hintId, errorId, hint, error)}
-        onChange={(event) => onChange(event.target.value)}
-      />
-      <Describers hintId={hintId} errorId={errorId} hint={hint} error={error} />
-    </div>
-  );
-}
-
-export function TextArea({
-  label,
-  value,
-  onChange,
-  error,
-  hint,
-  optional,
-  placeholder,
-  maxLength,
-  rows = 4,
-  name,
-}: Omit<TextProps, "type" | "autoComplete"> & { rows?: number }) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  return (
-    <div>
-      <FieldLabel htmlFor={id} optional={optional}>
-        {label}
-      </FieldLabel>
-      <textarea
-        id={id}
-        name={name}
-        rows={rows}
-        className={`mt-1.5 ${controlClasses(Boolean(error))}`}
-        value={value}
-        placeholder={placeholder}
-        maxLength={maxLength}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy(hintId, errorId, hint, error)}
-        onChange={(event) => onChange(event.target.value)}
-      />
-      <Describers hintId={hintId} errorId={errorId} hint={hint} error={error} />
-    </div>
-  );
-}
-
-/**
- * A dropdown whose value is always a string.
- *
- * The API publishes option ids as both strings and numbers, and a select
- * element has string values whatever they stand for, so the conversion
- * happens once, where the answer is read, rather than in four call sites.
- */
-export function SelectInput({
-  label,
-  value,
-  options,
-  onChange,
-  error,
-  hint,
-  optional,
-  placeholder = "Choose one",
-  name,
-}: {
-  label: string;
-  value: string;
-  options: readonly Option<string | number>[];
-  onChange: (value: string) => void;
-  error?: string;
-  hint?: ReactNode;
-  optional?: boolean;
-  placeholder?: string;
-  name?: string;
-}) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  return (
-    <div>
-      <FieldLabel htmlFor={id} optional={optional}>
-        {label}
-      </FieldLabel>
-      <select
-        id={id}
-        name={name}
-        className={`mt-1.5 ${controlClasses(Boolean(error))}`}
-        value={value}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy(hintId, errorId, hint, error)}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        <option value="">{placeholder}</option>
-        {options.map((option) => (
-          <option key={String(option.id)} value={String(option.id)}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      <Describers hintId={hintId} errorId={errorId} hint={hint} error={error} />
-    </div>
-  );
-}
-
-/** A set of choices small enough to show at once, as real radio buttons. */
-export function RadioGroup({
-  legend,
-  value,
-  options,
-  onChange,
-  error,
-  hint,
-}: {
-  legend: string;
-  value: string;
-  options: readonly Option<string | number>[];
-  onChange: (value: string) => void;
-  error?: string;
-  hint?: ReactNode;
-}) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  return (
-    <fieldset aria-describedby={describedBy(hintId, errorId, hint, error)}>
-      <legend className="text-sm font-semibold text-ink">{legend}</legend>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {options.map((option) => {
-          const checked = String(option.id) === String(value);
-          return (
-            <label
-              key={String(option.id)}
-              className={`flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium ${
-                checked
-                  ? "border-accent-700 bg-accent-50 text-accent-800"
-                  : "border-line bg-white text-ink-muted"
-              }`}
-            >
-              <input
-                type="radio"
-                name={id}
-                className="h-4 w-4 accent-accent-700"
-                value={String(option.id)}
-                checked={checked}
-                onChange={(event) => onChange(event.target.value)}
-              />
-              {option.label}
-            </label>
-          );
-        })}
-      </div>
-      <Describers hintId={hintId} errorId={errorId} hint={hint} error={error} />
-    </fieldset>
-  );
-}
-
-export function Toggle({
-  label,
-  description,
-  checked,
-  onChange,
-}: {
-  label: string;
-  description?: ReactNode;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-line bg-white p-4">
-      <input
-        id={id}
-        type="checkbox"
-        className="mt-0.5 h-5 w-5 shrink-0 accent-accent-700"
-        checked={checked}
-        aria-describedby={description ? hintId : undefined}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <div>
-        <label htmlFor={id} className="block text-sm font-semibold text-ink">
+    <div className="mt-5">
+      {labelFor ? (
+        <label htmlFor={id} className="block text-label font-semibold">
           {label}
         </label>
-        {description ? (
-          <p id={hintId} className="mt-1 text-sm text-ink-soft">
-            {description}
+      ) : (
+        <span className="block text-label font-semibold">{label}</span>
+      )}
+      {helper ? (
+        <span id={helperId} className="mb-2 mt-0.5 block text-small text-ink-500">
+          {helper}
+        </span>
+      ) : null}
+      {children}
+      <div className="min-h-[1.5rem] pt-1">
+        {error ? (
+          <p
+            id={errorId}
+            role="alert"
+            className="flex items-start gap-1.5 text-small text-danger-700"
+          >
+            <WarningIcon className="mt-0.5 h-4 w-4 flex-none" />
+            {error}
           </p>
         ) : null}
       </div>
@@ -325,242 +75,226 @@ export function Toggle({
   );
 }
 
+function describedBy(id: string, helper: unknown, error: unknown): string | undefined {
+  const parts = [helper ? `${id}-helper` : null, error ? `${id}-error` : null].filter(
+    Boolean,
+  );
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+export interface TextInputProps
+  extends Omit<InputHTMLAttributes<HTMLInputElement>, "id"> {
+  label: ReactNode;
+  helper?: ReactNode;
+  error?: string | null;
+  id?: string;
+}
+
+export const TextInput = forwardRef<HTMLInputElement, TextInputProps>(
+  function TextInput({ label, helper, error, id, className = "", ...rest }, ref) {
+    const generated = useId();
+    const fieldId = id ?? generated;
+    return (
+      <FieldShell id={fieldId} label={label} helper={helper} error={error}>
+        <input
+          ref={ref}
+          id={fieldId}
+          className={`${INPUT_CLASS} ${className}`}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy(fieldId, helper, error)}
+          {...rest}
+        />
+      </FieldShell>
+    );
+  },
+);
+
+export interface SelectInputProps
+  extends Omit<SelectHTMLAttributes<HTMLSelectElement>, "id"> {
+  label: ReactNode;
+  helper?: ReactNode;
+  error?: string | null;
+  options: Option<string | number>[];
+  placeholder?: string;
+  id?: string;
+}
+
+export const SelectInput = forwardRef<HTMLSelectElement, SelectInputProps>(
+  function SelectInput(
+    { label, helper, error, options, placeholder, id, className = "", ...rest },
+    ref,
+  ) {
+    const generated = useId();
+    const fieldId = id ?? generated;
+    return (
+      <FieldShell id={fieldId} label={label} helper={helper} error={error}>
+        <select
+          ref={ref}
+          id={fieldId}
+          className={`${INPUT_CLASS} ${className}`}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy(fieldId, helper, error)}
+          {...rest}
+        >
+          {placeholder ? <option value="">{placeholder}</option> : null}
+          {options.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </FieldShell>
+    );
+  },
+);
+
 /**
- * How many mentees can join one session.
+ * A small bounded number, such as how many people are in a session.
  *
- * A stepper rather than a dropdown because the range is short and the
- * question is "how many", so the answer should feel like a quantity rather
- * than a category.
- *
- * The value carries role="spinbutton" and takes the arrow keys, Home and
- * End, which is the pattern a screen reader announces as adjustable. The two
- * buttons do the same job for a pointer, and both are disabled at the ends
- * rather than silently doing nothing.
+ * A pill shaped group with a minus, an output announced politely and a plus.
+ * The buttons clamp at the ends of the range rather than disappearing, so the
+ * control does not change shape as it is used.
  */
-export function MenteeStepper({
+export function Stepper({
   label,
+  helper,
   value,
   min,
   max,
   onChange,
-  sessionLabel,
+  describe,
   error,
-  hint,
+  id: givenId,
+  decreaseLabel = "Fewer people",
+  increaseLabel = "More people",
 }: {
-  label: string;
+  label: ReactNode;
+  helper?: ReactNode;
   value: number;
   min: number;
   max: number;
-  onChange: (value: number) => void;
-  sessionLabel: string;
-  error?: string;
-  hint?: ReactNode;
-}) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  const labelId = `${id}-label`;
-
-  const clamp = (next: number) => Math.min(max, Math.max(min, next));
-
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const moves: Record<string, number | undefined> = {
-      ArrowUp: value + 1,
-      ArrowRight: value + 1,
-      ArrowDown: value - 1,
-      ArrowLeft: value - 1,
-      PageUp: value + 1,
-      PageDown: value - 1,
-      Home: min,
-      End: max,
-    };
-    const next = moves[event.key];
-    if (next === undefined) {
-      return;
-    }
-    event.preventDefault();
-    onChange(clamp(next));
-  }
-
-  return (
-    <div>
-      <p id={labelId} className="text-sm font-semibold text-ink">
-        {label}
-      </p>
-      <div className="mt-2 flex items-center gap-3">
-        <button
-          type="button"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-white text-xl font-semibold text-ink-muted disabled:opacity-40"
-          onClick={() => onChange(clamp(value - 1))}
-          disabled={value <= min}
-          aria-label="One fewer mentee"
-        >
-          <span aria-hidden="true">&minus;</span>
-        </button>
-        <div
-          role="spinbutton"
-          tabIndex={0}
-          aria-labelledby={labelId}
-          aria-valuenow={value}
-          aria-valuemin={min}
-          aria-valuemax={max}
-          aria-valuetext={`${formatMentees(value)}, ${sessionLabel}`}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={describedBy(hintId, errorId, hint, error)}
-          onKeyDown={onKeyDown}
-          className={`tabular flex min-h-[44px] flex-1 items-center justify-between gap-3 rounded-xl border bg-white px-4 py-2 ${
-            error ? "border-caution-700" : "border-line"
-          }`}
-        >
-          <span className="text-xl font-semibold">{value}</span>
-          <span className="text-sm font-medium text-accent-800">{sessionLabel}</span>
-        </div>
-        <button
-          type="button"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-white text-xl font-semibold text-ink-muted disabled:opacity-40"
-          onClick={() => onChange(clamp(value + 1))}
-          disabled={value >= max}
-          aria-label="One more mentee"
-        >
-          <span aria-hidden="true">+</span>
-        </button>
-      </div>
-      <Describers hintId={hintId} errorId={errorId} hint={hint} error={error} />
-    </div>
-  );
-}
-
-/**
- * The skills and topics a mentor offers.
- *
- * Checkboxes rather than a multiple select: thirty options is too many to
- * hold in a dropdown, and a checkbox is the one control every browser and
- * every assistive technology already agrees about.
- */
-export function SkillChecklist({
-  legend,
-  options,
-  selected,
-  onToggle,
-  error,
-  hint,
-}: {
-  legend: string;
-  options: Option[];
-  selected: string[];
-  onToggle: (id: string) => void;
-  error?: string;
-  hint?: ReactNode;
-}) {
-  const id = useId();
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-  const chosen = new Set(selected);
-
-  return (
-    <fieldset aria-describedby={describedBy(hintId, errorId, hint, error)}>
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <legend className="text-sm font-semibold text-ink">{legend}</legend>
-        <p aria-live="polite" className="text-sm text-ink-soft">
-          {selected.length} chosen
-        </p>
-      </div>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        {options.map((option) => {
-          const checked = chosen.has(option.id);
-          return (
-            <label
-              key={option.id}
-              className={`flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-2 text-sm ${
-                checked
-                  ? "border-accent-700 bg-accent-50 text-accent-800"
-                  : "border-line bg-white text-ink-muted"
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="h-4 w-4 shrink-0 accent-accent-700"
-                checked={checked}
-                onChange={() => onToggle(option.id)}
-              />
-              <span className="font-medium">{option.label}</span>
-            </label>
-          );
-        })}
-      </div>
-      <Describers hintId={hintId} errorId={errorId} hint={hint} error={error} />
-    </fieldset>
-  );
-}
-
-/** Where the mentor is in a form with more than one step. */
-export function ProgressSteps({
-  steps,
-  current,
-}: {
-  steps: string[];
-  current: number;
-}) {
-  return (
-    <nav aria-label="Registration progress" className="mb-6">
-      <p className="text-sm font-semibold text-accent-700">
-        Step {current + 1} of {steps.length}
-      </p>
-      <ol className="mt-2 flex flex-wrap gap-2">
-        {steps.map((step, index) => {
-          const done = index < current;
-          const here = index === current;
-          return (
-            <li key={step} className="flex min-w-0 flex-1 basis-24 flex-col gap-1.5">
-              <span
-                aria-hidden="true"
-                className={`h-1.5 rounded-full ${here || done ? "bg-accent-600" : "bg-line"}`}
-              />
-              <span
-                className={`truncate text-xs font-medium ${
-                  here ? "text-accent-800" : "text-ink-soft"
-                }`}
-              >
-                {step}
-                {here ? <span className="sr-only"> (current step)</span> : null}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
-}
-
-/**
- * The one place a form reports that something above needs changing.
- *
- * role="alert" so it is read as soon as it appears, and focusable so the code
- * that puts it there can move the mentor to it.
- */
-export function FormErrorSummary({
-  messages,
-  id,
-}: {
-  messages: string[];
+  onChange: (next: number) => void;
+  /** How the current value is read out, for example "4 people". */
+  describe: (value: number) => string;
+  error?: string | null;
   id?: string;
+  decreaseLabel?: string;
+  increaseLabel?: string;
 }) {
-  if (messages.length === 0) {
-    return null;
-  }
+  const generated = useId();
+  const id = givenId ?? generated;
   return (
-    <div
-      id={id}
-      role="alert"
-      tabIndex={-1}
-      className="rounded-xl border border-caution-200 bg-caution-50 p-4 text-sm text-caution-700"
-    >
-      <p className="font-semibold">Please check these answers</p>
-      <ul className="mt-2 list-disc space-y-1 pl-5">
-        {messages.map((message) => (
-          <li key={message}>{message}</li>
-        ))}
-      </ul>
-    </div>
+    <FieldShell id={id} label={label} helper={helper} error={error} labelFor={false}>
+      <div className="inline-flex items-center gap-3 rounded-pill border border-line p-1">
+        <button
+          type="button"
+          aria-label={decreaseLabel}
+          disabled={value <= min}
+          onClick={() => onChange(Math.max(min, value - 1))}
+          className="h-11 w-11 cursor-pointer rounded-pill bg-accent-100 text-xl font-bold text-accent-800 transition-colors duration-[180ms] ease-entrance hover:bg-tint-indigo disabled:cursor-not-allowed disabled:opacity-60 mid:h-10 mid:w-10"
+        >
+          &minus;
+        </button>
+        <output
+          id={id}
+          aria-live="polite"
+          className="min-w-[72px] text-center font-bold"
+        >
+          {describe(value)}
+        </output>
+        <button
+          type="button"
+          aria-label={increaseLabel}
+          disabled={value >= max}
+          onClick={() => onChange(Math.min(max, value + 1))}
+          className="h-11 w-11 cursor-pointer rounded-pill bg-accent-100 text-xl font-bold text-accent-800 transition-colors duration-[180ms] ease-entrance hover:bg-tint-indigo disabled:cursor-not-allowed disabled:opacity-60 mid:h-10 mid:w-10"
+        >
+          +
+        </button>
+      </div>
+    </FieldShell>
   );
 }
+
+/**
+ * One of a set of choices.
+ *
+ * A real checkbox that is visually hidden but still focusable, with the pill
+ * as its label. A chosen pill changes fill, border and weight together, so
+ * the selection is not carried by colour alone.
+ */
+export function PillCheckbox({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="relative inline-flex cursor-pointer">
+      <input
+        type="checkbox"
+        className="absolute h-px w-px opacity-0"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span
+        className={`inline-flex min-h-[44px] items-center rounded-pill border px-4 py-2 text-[0.9375rem] transition-colors duration-[180ms] ease-entrance mid:min-h-[40px] ${
+          checked
+            ? "border-accent-700 bg-accent-100 font-semibold text-accent-800"
+            : "border-line font-medium text-ink-700 hover:border-line-strong hover:bg-surface-sunk"
+        }`}
+      >
+        {label}
+      </span>
+    </label>
+  );
+}
+
+export interface SummaryProblem {
+  /** The id of the field to jump to. */
+  id: string;
+  message: string;
+}
+
+/**
+ * Everything wrong with the form, at the top of it.
+ *
+ * It complements the inline messages and never replaces them. Focus is moved
+ * here on a failed submit, and each line is a link to the field it is about.
+ */
+export const ErrorSummary = forwardRef<HTMLDivElement, { problems: SummaryProblem[] }>(
+  function ErrorSummary({ problems }, ref) {
+    if (problems.length === 0) {
+      return null;
+    }
+    return (
+      <div
+        ref={ref}
+        role="alert"
+        tabIndex={-1}
+        className="mb-6 rounded-card border border-line bg-danger-fill p-6 text-danger-700"
+      >
+        <h2 className="text-h3 font-semibold">
+          {problems.length === 1
+            ? "One answer needs changing"
+            : `${problems.length} answers need changing`}
+        </h2>
+        <ul className="mt-3 list-disc space-y-1 pl-5">
+          {problems.map((problem) => (
+            <li key={`${problem.id}-${problem.message}`}>
+              <a
+                href={`#${problem.id}`}
+                className="font-semibold underline underline-offset-[3px]"
+              >
+                {problem.message}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  },
+);

@@ -1,131 +1,219 @@
 "use client";
 
 /**
- * Another service, priced as soon as it is described.
+ * Add a service: calm, with a banner.
  *
- * The same questions as the third step of registration, rendered from the
- * same component, because they are the same questions: the API asks for them
- * the same way and validates them the same way, and two forms that drift
- * apart would be two different claims about what sets a price.
+ * A short form, because a mentor adding a second service has already told us
+ * who they are. The three answers here are the three the price is worked out
+ * from, and the live preview beside them is the same panel the registration
+ * form uses.
  *
- * One thing is not asked again. How many services the mentor plans to offer
- * is a registration question; once they are adding a second service, the
- * system counts the services it has rather than asking.
+ * The mentor's existing skills are ticked to start with, since a second
+ * service usually covers much of what the first one did, and every one of
+ * them can be unticked.
  */
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-import { FormErrorSummary } from "@/components/form";
-import { RequireMentor } from "@/components/require-mentor";
+import { PillCheckbox, SelectInput, Stepper } from "@/components/form";
+import { PricePreview } from "@/components/price-preview";
+import { RequireAuth } from "@/components/require-auth";
 import {
-  ServiceFields,
-  type ServiceFormState,
-  emptyServiceState,
-  servicePayload,
-  validateService,
-} from "@/components/service-fields";
-import { Button, Card, ErrorNotice, LoadingBlock, PageHeading } from "@/components/ui";
+  Banner,
+  Button,
+  Column,
+  ErrorNotice,
+  LoadingBlock,
+  TextLink,
+} from "@/components/ui";
 import { api } from "@/lib/api-client";
-import type { OptionsResponse } from "@/lib/api-types";
+import type { Mentor, OptionsResponse } from "@/lib/api-types";
+import { SKILL_GROUPS } from "@/lib/copy";
 import { ApiError, messageFor, toFieldErrors } from "@/lib/errors";
 import { useAsync } from "@/lib/use-async";
 
-export default function AddServicePage() {
-  return (
-    <RequireMentor>
-      {(mentorId) => <AddServiceForm mentorId={mentorId} />}
-    </RequireMentor>
-  );
-}
-
-function AddServiceForm({ mentorId }: { mentorId: number }) {
+function AddServiceForm({
+  mentor,
+  options,
+}: {
+  mentor: Mentor;
+  options: OptionsResponse;
+}) {
   const router = useRouter();
-  const options = useAsync<OptionsResponse>((signal) => api.options(signal), "options");
+  const existing = mentor.services[0] ?? null;
 
-  const [service, setService] = useState<ServiceFormState | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [general, setGeneral] = useState<string[]>([]);
+  const [field, setField] = useState(existing?.field ?? "");
+  const [maxMentees, setMaxMentees] = useState(1);
+  const [skills, setSkills] = useState<string[]>(existing?.skills ?? []);
+  const [problems, setProblems] = useState<Record<string, string>>({});
+  const [failure, setFailure] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
-  if (options.status === "loading") {
-    return <LoadingBlock label="Loading the form" />;
-  }
-  if (options.status === "error" || options.data === null) {
-    return <ErrorNotice message={messageFor(options.error)} onRetry={options.reload} />;
+  const skillLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const skill of options.skills) {
+      labels.set(skill.id, skill.label);
+    }
+    return labels;
+  }, [options.skills]);
+
+  function toggleSkill(id: string, on: boolean) {
+    setSkills((was) => (on ? [...was, id] : was.filter((skill) => skill !== id)));
   }
 
-  const loaded = options.data;
-  const state = service ?? emptyServiceState(loaded);
+  async function onSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setFailure(null);
 
-  async function submit() {
-    const found = validateService(state, "");
-    if (Object.keys(found).length > 0) {
-      setErrors(found);
-      setGeneral(["Some answers still need filling in before we can suggest a price."]);
+    if (!field) {
+      setProblems({ field: "Choose the field this service is in." });
       return;
     }
-
+    setProblems({});
     setSending(true);
-    setErrors({});
-    setGeneral([]);
+
     try {
-      const result = await api.addService(mentorId, servicePayload(state));
-      router.push(`/recommendation/${result.recommendation.id}`);
+      const created = await api.addService(mentor.id, {
+        field,
+        max_mentees: maxMentees,
+        min_commitment: options.min_commitment_default,
+        skills,
+      });
+      router.push(`/recommendation/${created.recommendation.id}`);
     } catch (error) {
-      if (error instanceof ApiError && error.fieldErrors.length > 0) {
+      if (error instanceof ApiError) {
         const mapped = toFieldErrors(error.fieldErrors, error.detail);
-        setErrors(mapped.fields);
-        setGeneral(mapped.general.length > 0 ? mapped.general : [error.detail]);
+        setProblems(mapped.fields);
+        setFailure(mapped.general[0] ?? null);
       } else {
-        setGeneral([messageFor(error)]);
+        setFailure(messageFor(error));
       }
       setSending(false);
     }
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <PageHeading
-        title="Add another service"
-        lead="Describe the session and we will suggest a price for it. These are the answers that set the price."
-      />
+    <div className="grid items-start gap-8 wide:grid-cols-[minmax(0,1fr)_360px]">
+      <form onSubmit={onSubmit} noValidate>
+        {failure ? (
+          <div
+            role="alert"
+            className="mb-6 rounded-card border border-line bg-danger-fill p-6 text-danger-700"
+          >
+            {failure}
+          </div>
+        ) : null}
 
-      <Card>
-        <FormErrorSummary messages={general} />
+        <section className="mb-6 rounded-card border border-line bg-surface p-6">
+          <h2 className="text-h3 font-semibold">What this service is</h2>
+          <p className="text-small text-ink-500">
+            The name on your card follows from these two answers, so there is nothing
+            else to type.
+          </p>
 
-        <form
-          className="mt-4 space-y-6"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit();
-          }}
-        >
-          <ServiceFields
-            options={loaded}
-            state={state}
-            onChange={(next) => {
-              setErrors({});
-              setService(next);
-            }}
-            errors={errors}
-            prefix=""
+          <SelectInput
+            id="service-field"
+            label="Field"
+            helper="The area this service is in."
+            placeholder="Choose a field"
+            options={options.fields}
+            value={field}
+            onChange={(event) => setField(event.target.value)}
+            error={problems.field ?? null}
           />
 
-          <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
-            <Button type="submit" disabled={sending}>
-              {sending ? "Working out your price" : "Suggest my price"}
-            </Button>
-            <Button
-              tone="quiet"
-              onClick={() => router.push("/dashboard")}
-              disabled={sending}
-            >
-              Cancel
-            </Button>
-          </div>
-        </form>
-      </Card>
+          <Stepper
+            id="service-group-size"
+            label="How many people per session?"
+            helper={`Choose 1 for one to one. Up to ${options.max_mentees.max} for a group.`}
+            value={maxMentees}
+            min={options.max_mentees.min}
+            max={options.max_mentees.max}
+            onChange={setMaxMentees}
+            describe={(value) => (value === 1 ? "1 person" : `${value} people`)}
+            error={problems.max_mentees ?? null}
+          />
+        </section>
+
+        <section className="mb-6 rounded-card border border-line bg-surface p-6">
+          <h2 className="text-h3 font-semibold">Skills it covers</h2>
+          <p className="text-small text-ink-500">
+            Ticked to match your profile. Change them to suit this service.
+          </p>
+          {problems.skills ? (
+            <p role="alert" className="mt-2 text-small text-danger-700">
+              {problems.skills}
+            </p>
+          ) : null}
+          {SKILL_GROUPS.map((group) => (
+            <fieldset key={group.name} className="mt-5 min-w-0">
+              <legend className="mb-2.5 text-overline uppercase text-ink-500">
+                {group.name}
+              </legend>
+              <div className="flex flex-wrap gap-2">
+                {group.skillIds
+                  .filter((id) => skillLabels.has(id))
+                  .map((id) => (
+                    <PillCheckbox
+                      key={id}
+                      label={skillLabels.get(id) ?? id}
+                      checked={skills.includes(id)}
+                      onChange={(on) => toggleSkill(id, on)}
+                    />
+                  ))}
+              </div>
+            </fieldset>
+          ))}
+        </section>
+
+        <Button type="submit" disabled={sending} aria-busy={sending}>
+          {sending ? "Working out the price" : "See the suggested price"}
+        </Button>
+        <p className="mt-3 text-small">
+          <TextLink href="/dashboard">Back to your dashboard</TextLink>
+        </p>
+      </form>
+
+      <aside aria-label="Live price preview" className="wide:sticky wide:top-4">
+        <PricePreview
+          field={field}
+          maxMentees={maxMentees}
+          skills={skills}
+          heading="Price for this service"
+        />
+      </aside>
     </div>
+  );
+}
+
+export default function AddServicePage() {
+  const options = useAsync((signal) => api.options(signal), "add-service-options");
+
+  return (
+    <RequireAuth>
+      {(mentor) => (
+        <>
+          <Banner
+            title="Add a service"
+            lead="Offer something new and get a suggested price for it."
+          />
+          <Column wide className="py-10">
+            {options.status === "loading" ? (
+              <LoadingBlock label="Loading the form" />
+            ) : null}
+            {options.status === "error" ? (
+              <ErrorNotice
+                message={messageFor(options.error)}
+                onRetry={options.reload}
+              />
+            ) : null}
+            {options.status === "ready" && options.data ? (
+              <AddServiceForm mentor={mentor} options={options.data} />
+            ) : null}
+          </Column>
+        </>
+      )}
+    </RequireAuth>
   );
 }

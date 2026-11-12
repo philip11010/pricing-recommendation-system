@@ -49,14 +49,14 @@ describe("a field with a message about it", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Enter your full name.");
   });
 
-  it("keeps the hint as well as the message, in that order", () => {
+  it("keeps the helper text as well as the message, in that order", () => {
     render(
       <TextInput
         label="Email address"
         type="email"
         value=""
         onChange={() => {}}
-        hint="We use it to find your account."
+        helper="We use it to find your account."
         error="Enter an email address we can reach you at."
       />,
     );

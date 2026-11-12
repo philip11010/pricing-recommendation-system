@@ -1,11 +1,10 @@
 /**
  * Turning the API's refusal into something a form can show.
  *
- * The API names a nested answer with a dotted path, like
- * `service.max_mentees`, and the form keys its fields by exactly that name,
- * so most of this is about the cases that are not a simple match: a field the
- * form does not render, two messages for one field, and an error list that
- * arrived empty.
+ * The API names each answer exactly as the registration body names it, and
+ * the form keys its fields by the same name, so most of this is about the
+ * cases that are not a simple match: a field the form does not render, two
+ * messages for one field, and an error list that arrived empty.
  */
 
 import { describe, expect, it } from "vitest";
@@ -17,22 +16,21 @@ import { toFieldErrors } from "@/lib/errors";
 describe("toFieldErrors", () => {
   it("attaches each message to the field the API named", () => {
     const mapped = toFieldErrors([
-      { field: "full_name", message: "String should have at least 2 characters" },
+      { field: "name", message: "String should have at least 2 characters" },
       {
         field: "email",
         message: "Enter an email address the mentor can be reached at.",
       },
       {
-        field: "service.max_mentees",
-        message: "The number of mentees in one session must be between 1 and 8.",
+        field: "max_mentees",
+        message: "The number of people in one session must be between 1 and 8.",
       },
     ]);
 
     expect(mapped.fields).toEqual({
-      full_name: "String should have at least 2 characters",
+      name: "String should have at least 2 characters",
       email: "Enter an email address the mentor can be reached at.",
-      "service.max_mentees":
-        "The number of mentees in one session must be between 1 and 8.",
+      max_mentees: "The number of people in one session must be between 1 and 8.",
     });
     expect(mapped.general).toEqual([]);
   });

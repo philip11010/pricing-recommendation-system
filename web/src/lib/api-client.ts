@@ -1,18 +1,17 @@
 /**
  * The one place this application talks to the pricing API.
  *
- * Everything goes through `request`, so there is a single place that adds the
- * identity header, a single place that turns a refusal into an `ApiError` with
- * the API's field messages intact, and a single place that notices the API is
- * not answering at all.
- *
- * There is no authentication yet. A mentor-scoped call states which mentor it
- * is for in the `X-Mentor-Id` header, and the API answers 404 rather than 403
- * for another mentor's record, so nothing can be learned by asking.
+ * Everything goes through `request`, so there is a single place that attaches
+ * the access token, a single place that turns a refusal into an `ApiError`
+ * with the API's field messages intact, a single place that notices the API
+ * is not answering at all, and a single place that reacts to the API saying
+ * the token is no longer good.
  */
 
 import { ApiError, NETWORK_MESSAGE, NetworkError, UNEXPECTED_MESSAGE } from "./errors";
+import { handleUnauthorized, readToken } from "./token";
 import type {
+  Activity,
   ApiErrorBody,
   ComparablesOrder,
   ComparablesResponse,
@@ -20,19 +19,23 @@ import type {
   Dashboard,
   Decision,
   DecisionPayload,
-  DemoMentor,
   HealthResponse,
+  LoginPayload,
   Mentor,
+  MentorDirectory,
   OptionsResponse,
+  PreviewPayload,
+  PreviewResponse,
+  PublicMentor,
   Recommendation,
   RegistrationPayload,
   RegistrationResponse,
+  Service,
   ServiceCreatedResponse,
   ServiceHistory,
   ServiceInputPayload,
+  TokenResponse,
 } from "./api-types";
-
-export const MENTOR_ID_HEADER = "X-Mentor-Id";
 
 const DEFAULT_API_URL = "http://127.0.0.1:8000";
 
@@ -45,12 +48,19 @@ export const API_URL = (process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL).repl
 type QueryValue = string | number | boolean | undefined;
 
 interface RequestOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH";
   body?: unknown;
-  /** Set on every mentor-scoped call. Omitted only where the API allows it. */
-  mentorId?: number;
+  /** Set on every call the API wants a token for. */
+  auth?: boolean;
   query?: Record<string, QueryValue>;
   signal?: AbortSignal;
+  /**
+   * Whether a 401 should sign this browser out.
+   *
+   * True everywhere except the log in attempt itself, where a refusal means
+   * the password was wrong rather than that a session ended.
+   */
+  signOutOn401?: boolean;
 }
 
 function buildUrl(path: string, query?: Record<string, QueryValue>): string {
@@ -83,14 +93,24 @@ async function errorBodyOf(response: Response): Promise<ApiErrorBody> {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, mentorId, query, signal } = options;
+  const {
+    method = "GET",
+    body,
+    auth = false,
+    query,
+    signal,
+    signOutOn401 = true,
+  } = options;
 
   const headers: Record<string, string> = {};
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
-  if (mentorId !== undefined) {
-    headers[MENTOR_ID_HEADER] = String(mentorId);
+  if (auth) {
+    const token = readToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
   }
 
   let response: Response;
@@ -112,7 +132,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, await errorBodyOf(response));
+    const failure = new ApiError(response.status, await errorBodyOf(response));
+    if (response.status === 401 && signOutOn401) {
+      handleUnauthorized();
+    }
+    throw failure;
   }
 
   if (response.status === 204) {
@@ -131,64 +155,94 @@ export const api = {
     return request<HealthResponse>("/health", { signal });
   },
 
-  /** Every option list the form renders. No identity needed. */
+  /** Every option list the form renders. No token needed. */
   options(signal?: AbortSignal) {
     return request<OptionsResponse>("/meta/options", { signal });
   },
 
-  register(payload: RegistrationPayload, signal?: AbortSignal) {
-    return request<RegistrationResponse>("/mentors", {
+  /* ------------------------------------------------------------- public */
+
+  directory(
+    params: {
+      field?: string;
+      group?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+    signal?: AbortSignal,
+  ) {
+    return request<MentorDirectory>("/mentors", { query: { ...params }, signal });
+  },
+
+  publicMentor(mentorId: number, signal?: AbortSignal) {
+    return request<PublicMentor>(`/mentors/${mentorId}/public`, { signal });
+  },
+
+  /** A price for a part filled form. Writes nothing and needs no account. */
+  preview(payload: PreviewPayload, signal?: AbortSignal) {
+    return request<PreviewResponse>("/preview", {
       method: "POST",
       body: payload,
       signal,
     });
   },
 
-  /**
-   * The mentors seeded for the demonstration.
-   *
-   * The one mentor-related call with no identity header: it is the list an
-   * identity is picked from, so requiring one would be circular.
-   */
-  demoMentors(signal?: AbortSignal) {
-    return request<DemoMentor[]>("/mentors/demo", { signal });
+  /* --------------------------------------------------------------- auth */
+
+  register(payload: RegistrationPayload, signal?: AbortSignal) {
+    return request<RegistrationResponse>("/auth/register", {
+      method: "POST",
+      body: payload,
+      signal,
+    });
   },
 
-  mentor(mentorId: number, signal?: AbortSignal) {
-    return request<Mentor>(`/mentors/${mentorId}`, { mentorId, signal });
+  login(payload: LoginPayload, signal?: AbortSignal) {
+    return request<TokenResponse>("/auth/login", {
+      method: "POST",
+      body: payload,
+      signal,
+      // A refusal here is a wrong password, which the form reports itself.
+      signOutOn401: false,
+    });
   },
 
-  dashboard(mentorId: number, signal?: AbortSignal) {
-    return request<Dashboard>(`/mentors/${mentorId}/dashboard`, { mentorId, signal });
+  me(signal?: AbortSignal) {
+    return request<Mentor>("/auth/me", { auth: true, signal });
+  },
+
+  /* ----------------------------------------------------------- services */
+
+  service(serviceId: number, signal?: AbortSignal) {
+    return request<Service>(`/services/${serviceId}`, { auth: true, signal });
   },
 
   addService(mentorId: number, payload: ServiceInputPayload, signal?: AbortSignal) {
     return request<ServiceCreatedResponse>(`/mentors/${mentorId}/services`, {
       method: "POST",
       body: payload,
-      mentorId,
+      auth: true,
       signal,
     });
   },
 
   /** Ask for a fresh price for a service the mentor already offers. */
-  createRecommendation(mentorId: number, serviceId: number, signal?: AbortSignal) {
+  createRecommendation(serviceId: number, signal?: AbortSignal) {
     return request<Recommendation>(`/services/${serviceId}/recommendations`, {
       method: "POST",
-      mentorId,
+      auth: true,
       signal,
     });
   },
 
-  recommendation(mentorId: number, recommendationId: number, signal?: AbortSignal) {
+  recommendation(recommendationId: number, signal?: AbortSignal) {
     return request<Recommendation>(`/recommendations/${recommendationId}`, {
-      mentorId,
+      auth: true,
       signal,
     });
   },
 
   comparables(
-    mentorId: number,
     serviceId: number,
     params: {
       sort?: ComparablesSort;
@@ -199,29 +253,40 @@ export const api = {
     signal?: AbortSignal,
   ) {
     return request<ComparablesResponse>(`/services/${serviceId}/comparables`, {
-      mentorId,
+      auth: true,
       query: { ...params },
       signal,
     });
   },
 
-  history(mentorId: number, serviceId: number, signal?: AbortSignal) {
+  history(serviceId: number, signal?: AbortSignal) {
     return request<ServiceHistory>(`/services/${serviceId}/history`, {
-      mentorId,
+      auth: true,
       signal,
     });
   },
 
-  decide(
-    mentorId: number,
-    recommendationId: number,
-    payload: DecisionPayload,
-    signal?: AbortSignal,
-  ) {
+  decide(recommendationId: number, payload: DecisionPayload, signal?: AbortSignal) {
     return request<Decision>(`/recommendations/${recommendationId}/decision`, {
       method: "POST",
       body: payload,
-      mentorId,
+      auth: true,
+      signal,
+    });
+  },
+
+  /* ---------------------------------------------------------- the mentor */
+
+  dashboard(mentorId: number, signal?: AbortSignal) {
+    return request<Dashboard>(`/mentors/${mentorId}/dashboard`, {
+      auth: true,
+      signal,
+    });
+  },
+
+  activity(mentorId: number, signal?: AbortSignal) {
+    return request<Activity>(`/mentors/${mentorId}/activity`, {
+      auth: true,
       signal,
     });
   },

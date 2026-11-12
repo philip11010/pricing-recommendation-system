@@ -1,100 +1,120 @@
 "use client";
 
 /**
- * The bar at the top of every page.
+ * The same header on every page, in two colours.
  *
- * On the landing page it is the brand and nothing else, because nobody has
- * said who they are yet. Everywhere after it, it carries the three things a
- * mentor needs wherever they are: who they are signed in as, the way back to
- * their own page, and the way out.
+ * Dark on the bold screens, so it belongs to the gradient underneath it, and
+ * white with a bottom border on the calm ones. Which screens are bold is
+ * decided here, in one list, rather than by each page passing a flag it could
+ * forget.
  *
- * "Switch mentor" rather than "Sign out", because there is no authentication
- * to sign out of. Saying "sign out" would claim a security property this
- * prototype does not have.
+ * A visitor and a signed in mentor see different navigation, and the current
+ * page is marked with aria-current as well as with colour and weight, so the
+ * mark is not carried by colour alone.
  */
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 
+import { LogoMark } from "@/components/logo";
+import { Button, ButtonLink } from "@/components/ui";
 import { BRAND } from "@/lib/copy";
-import {
-  MENTOR_CHANGED_EVENT,
-  clearMentorId,
-  readMentorId,
-  readMentorName,
-} from "@/lib/mentor-session";
+import { useSession } from "@/lib/session";
+
+/** The screens that carry the full bleed gradient, per DESIGN.md section 12. */
+function isBoldScreen(path: string): boolean {
+  return path === "/" || path === "/login" || path.startsWith("/recommendation/");
+}
+
+export function initialsOf(name: string): string {
+  return (name ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
 
 export function SiteHeader() {
-  const pathname = usePathname();
-  const router = useRouter();
-  const [mentorId, setMentorId] = useState<number | null>(null);
-  const [mentorName, setMentorName] = useState<string | null>(null);
+  const path = usePathname() ?? "/";
+  const dark = isBoldScreen(path);
+  const { mentor, logout } = useSession();
 
-  const refresh = useCallback(() => {
-    setMentorId(readMentorId());
-    setMentorName(readMentorName());
-  }, []);
+  const shell = dark
+    ? "on-gradient bg-on-gradient-dark text-surface"
+    : "border-b border-line bg-surface";
+  const linkTone = dark ? "text-surface" : "text-ink-700";
 
-  useEffect(() => {
-    refresh();
-    window.addEventListener(MENTOR_CHANGED_EVENT, refresh);
-    // Another tab switching mentor should not leave this one claiming the
-    // old name.
-    window.addEventListener("storage", refresh);
-    return () => {
-      window.removeEventListener(MENTOR_CHANGED_EVENT, refresh);
-      window.removeEventListener("storage", refresh);
-    };
-  }, [refresh, pathname]);
-
-  const onLanding = pathname === "/";
-  const signedIn = !onLanding && mentorId !== null;
-
-  function switchMentor() {
-    clearMentorId();
-    router.push("/mentors");
-  }
+  const navLink = (href: string, label: string) => {
+    const current = path === href || path.startsWith(`${href}/`);
+    return (
+      <Link
+        href={href}
+        aria-current={current ? "page" : undefined}
+        className={`inline-flex min-h-[44px] items-center rounded-pill px-3 py-2.5 mid:min-h-[40px] transition-colors duration-[180ms] ease-entrance ${
+          current
+            ? dark
+              ? "font-bold text-surface"
+              : "font-bold text-accent-700"
+            : `font-medium ${linkTone}`
+        }`}
+      >
+        {label}
+      </Link>
+    );
+  };
 
   return (
-    <header className="border-b border-line bg-white">
-      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
+    <header className={`relative z-10 ${shell}`}>
+      <div className="mx-auto flex w-full max-w-site flex-wrap items-center justify-between gap-4 px-4 py-[18px] sm:px-6">
         <Link
-          href={signedIn ? "/dashboard" : "/"}
-          className="flex items-center gap-2 text-base font-bold tracking-tight"
+          href="/"
+          aria-label={`${BRAND} home`}
+          className="flex items-center gap-2.5 font-display text-2xl font-extrabold tracking-[-0.03em]"
         >
-          <span
-            aria-hidden="true"
-            className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-700 text-sm font-bold text-white"
-          >
-            CM
-          </span>
+          <LogoMark onDark={dark} />
           {BRAND}
         </Link>
 
-        {signedIn ? (
-          <nav aria-label="Mentor" className="flex items-center gap-1 sm:gap-3">
-            <span className="hidden max-w-[12rem] truncate text-sm text-ink-muted sm:inline">
-              Signed in as{" "}
-              <span className="font-semibold text-ink">
-                {mentorName ?? `mentor ${mentorId}`}
+        <nav
+          aria-label="Main"
+          className="flex flex-wrap items-center justify-end gap-1.5"
+        >
+          {mentor ? (
+            <>
+              {navLink("/mentors", "Mentors")}
+              {navLink("/dashboard", "Dashboard")}
+              {/* The outlined pill has a hover state built for the surface it
+                  is on. A quiet pill recoloured for the gradient would keep
+                  the light hover fill underneath its white label. */}
+              <Button variant={dark ? "outlineDark" : "quiet"} small onClick={logout}>
+                Log out
+              </Button>
+              <span
+                aria-hidden="true"
+                className="ml-1 inline-grid h-9 w-9 flex-none place-items-center rounded-pill bg-tint-violet text-label font-bold text-accent-800"
+              >
+                {initialsOf(mentor.full_name)}
               </span>
-            </span>
-            <Link
-              href="/dashboard"
-              className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-semibold text-accent-800 hover:bg-accent-50"
-            >
-              My page
-            </Link>
-            <button
-              type="button"
-              onClick={switchMentor}
-              className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-semibold text-ink-muted hover:bg-shell"
-            >
-              Switch mentor
-            </button>
-          </nav>
-        ) : null}
+            </>
+          ) : (
+            <>
+              <span className="hidden mid:inline">
+                {navLink("/mentors", "Browse mentors")}
+              </span>
+              <ButtonLink
+                href="/login"
+                small
+                variant={dark ? "outlineDark" : "outline"}
+              >
+                Existing mentor
+              </ButtonLink>
+              <ButtonLink href="/register" small variant={dark ? "white" : "solid"}>
+                Register
+              </ButtonLink>
+            </>
+          )}
+        </nav>
       </div>
     </header>
   );

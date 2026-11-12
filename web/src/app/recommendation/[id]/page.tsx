@@ -1,326 +1,301 @@
 "use client";
 
 /**
- * One suggested price, which is the page the whole application exists for.
+ * The price screen: a bold hero, then calm sections.
  *
- * The order of it is the order a mentor asks the questions in: what should I
- * charge, how sure are you, how does that compare with what I charge now,
- * what do mentors like me charge, and what do you want me to do about it.
+ * This is the payload. The hero gradient holds the headline, one line on what
+ * the price was based on, and the price card: the figure on white inside the
+ * card, the range, the advisory sentence, the low confidence note when it
+ * applies, and the three answers.
  *
- * The headline figure is what one mentee pays, because that is the number a
- * mentor quotes. For a session of one that is the same as the session price,
- * so there is one figure rather than the same number printed twice.
+ * Below the gradient, on white, the two comparisons. Each opens with a plain
+ * language sentence and then the visual, never the other way round.
  */
 
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { ComparableRows, ComparablesSummaryLine } from "@/components/comparables";
 import { DecisionPanel } from "@/components/decision-panel";
-import { PriceHistogram } from "@/components/price-histogram";
-import { RequireMentor } from "@/components/require-mentor";
+import { DotStrip } from "@/components/dot-strip";
+import { PriceLadder } from "@/components/price-ladder";
+import { RequireAuth } from "@/components/require-auth";
 import {
-  Badge,
-  Callout,
   Card,
+  Chip,
+  Column,
   ErrorNotice,
   LoadingBlock,
-  SectionHeading,
+  Note,
+  Overline,
+  RaisedCard,
+  TextLink,
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
-import type {
-  ComparablesResponse,
-  Decision,
-  Mentor,
-  Recommendation,
-  Service,
-  ServiceHistory,
-} from "@/lib/api-types";
+import type { Mentor, Recommendation } from "@/lib/api-types";
+import { priceScale } from "@/lib/charts";
 import {
+  ADVISORY_LINE,
   COMPARABLES_UNAVAILABLE_NOTE,
   LOW_CONFIDENCE_NOTE,
-  NO_PRICE_SET,
-  POSITION_HEADINGS,
-  POSITION_MESSAGES,
+  LOW_CONFIDENCE_TITLE,
+  NO_COMPARABLES_NOTE,
+  WIDENED_NOTE,
   WITH_HISTORY_NOTE,
+  decisionWord,
 } from "@/lib/copy";
-import { isNotFound, messageFor } from "@/lib/errors";
-import { formatMoney, formatPercent, formatRange } from "@/lib/format";
-import { isOneToOne } from "@/lib/session-label";
+import { isNotFound, isUnprepared, messageFor } from "@/lib/errors";
+import { formatMoney } from "@/lib/format";
 import { useAsync } from "@/lib/use-async";
 
-const COMPARABLE_PREVIEW = 5;
-
-interface PageData {
-  recommendation: Recommendation;
-  mentor: Mentor;
-  comparables: ComparablesResponse | null;
-  history: ServiceHistory | null;
+function firstNameOf(name: string): string {
+  return (name ?? "").trim().split(/\s+/)[0] ?? "";
 }
 
-export default function RecommendationPage() {
-  const params = useParams<{ id: string }>();
-  const recommendationId = Number.parseInt(params?.id ?? "", 10);
-
-  if (!Number.isInteger(recommendationId)) {
-    return <ErrorNotice message="That is not a suggestion we can look up." />;
-  }
-
-  return (
-    <RequireMentor>
-      {(mentorId) => (
-        <RecommendationView mentorId={mentorId} recommendationId={recommendationId} />
-      )}
-    </RequireMentor>
-  );
+function sessionWords(recommendation: Recommendation): string {
+  return recommendation.max_mentees <= 1
+    ? "AUD, one to one"
+    : `AUD, group of ${recommendation.max_mentees}`;
 }
 
-function RecommendationView({
-  mentorId,
-  recommendationId,
-}: {
-  mentorId: number;
-  recommendationId: number;
-}) {
-  const [decision, setDecision] = useState<Decision | null>(null);
-
-  const page = useAsync<PageData>(async (signal) => {
-    const recommendation = await api.recommendation(mentorId, recommendationId, signal);
-    const [mentor, comparables, history] = await Promise.all([
-      api.mentor(mentorId, signal),
-      // A server with no comparison table still prices perfectly well, and
-      // the only thing it cannot do is say what other mentors charge. That
-      // is a missing panel, not a broken page.
-      api
-        .comparables(
-          mentorId,
-          recommendation.service_id,
-          { limit: COMPARABLE_PREVIEW },
-          signal,
-        )
-        .catch(() => null),
-      recommendation.status === "pending"
-        ? Promise.resolve(null)
-        : api.history(mentorId, recommendation.service_id, signal).catch(() => null),
-    ]);
-    return { recommendation, mentor, comparables, history };
-  }, `recommendation-${mentorId}-${recommendationId}`);
-
-  if (page.status === "loading") {
-    return <LoadingBlock label="Working out your suggestion" />;
-  }
-
-  if (page.status === "error" || page.data === null) {
-    if (isNotFound(page.error)) {
-      return (
-        <ErrorNotice message="We cannot find that suggestion. It may belong to another mentor, or it may never have existed." />
-      );
-    }
-    return <ErrorNotice message={messageFor(page.error)} onRetry={page.reload} />;
-  }
-
-  const { recommendation, mentor, comparables, history } = page.data;
-  const service = mentor.services.find(
-    (candidate) => candidate.id === recommendation.service_id,
+function Comparisons({ recommendation }: { recommendation: Recommendation }) {
+  const { status, data, error } = useAsync(
+    (signal) =>
+      api.comparables(recommendation.service_id, { limit: 60, sort: "price" }, signal),
+    `comparables-${recommendation.service_id}`,
   );
-  const alreadyDecided =
-    decision ??
-    history?.items.find((item) => item.recommendation.id === recommendation.id)
-      ?.decision ??
-    null;
 
-  return (
-    <div className="space-y-6">
-      <PriceHeadline recommendation={recommendation} service={service} />
+  if (status === "loading") {
+    return <LoadingBlock label="Loading what similar mentors charge" />;
+  }
 
+  if (status === "error") {
+    return (
       <Card>
-        <SectionHeading
-          title="How sure we are"
-          description={
-            recommendation.low_confidence ? LOW_CONFIDENCE_NOTE : WITH_HISTORY_NOTE
-          }
-        />
-        <div className="flex flex-wrap gap-2">
-          <Badge tone={recommendation.low_confidence ? "caution" : "accent"}>
-            {recommendation.low_confidence ? "First estimate" : "Based on your record"}
-          </Badge>
-          {service?.profile_verified ? (
-            <Badge tone="quiet">Profile verified</Badge>
-          ) : null}
+        <h2 className="text-h3 font-semibold">Mentors like you</h2>
+        <p className="mt-2 text-ink-700">
+          {isUnprepared(error) ? COMPARABLES_UNAVAILABLE_NOTE : messageFor(error)}
+        </p>
+      </Card>
+    );
+  }
+
+  const summary = data?.summary;
+  const items = data?.items ?? [];
+
+  if (!summary || summary.count === 0) {
+    return (
+      <Card>
+        <h2 className="text-h3 font-semibold">Mentors like you</h2>
+        <p className="mt-2 text-ink-700">{NO_COMPARABLES_NOTE}</p>
+      </Card>
+    );
+  }
+
+  const prices = items.map((item) => item.price);
+  const scale = priceScale([
+    ...prices,
+    summary.p25_price,
+    summary.p75_price,
+    recommendation.recommended_price,
+  ]);
+
+  const band =
+    summary.p25_price !== null && summary.p75_price !== null
+      ? { low: summary.p25_price, high: summary.p75_price }
+      : null;
+
+  const inside =
+    band !== null &&
+    recommendation.recommended_price >= band.low &&
+    recommendation.recommended_price <= band.high;
+
+  const ladderSentence = band
+    ? inside
+      ? `Your suggested price is in the middle of what similar mentors charge. Most of them charge between ${formatMoney(band.low)} and ${formatMoney(band.high)}.`
+      : recommendation.recommended_price < band.low
+        ? `Your suggested price is below the middle of what similar mentors charge, which is ${formatMoney(band.low)} to ${formatMoney(band.high)}.`
+        : `Your suggested price is above the middle of what similar mentors charge, which is ${formatMoney(band.low)} to ${formatMoney(band.high)}.`
+    : `We have ${summary.count} similar mentors to compare you with, but not enough of them to say where the middle sits.`;
+
+  return (
+    <div className="grid gap-6 wide:grid-cols-2">
+      <Card>
+        <h2 className="text-h3 font-semibold">Where your price sits</h2>
+        <div className="mt-2">
+          <PriceLadder
+            scale={scale}
+            bandLow={band?.low ?? null}
+            bandHigh={band?.high ?? null}
+            suggested={recommendation.recommended_price}
+            sentence={ladderSentence}
+            tableCaption="Where the suggested price sits, in AUD"
+          />
         </div>
-      </Card>
-
-      <CurrentPriceCard recommendation={recommendation} />
-
-      <Card>
-        <SectionHeading
-          title="What similar mentors charge"
-          action={
-            comparables && comparables.summary.count > 0 ? (
-              <Link
-                href={`/similar/${recommendation.service_id}`}
-                className="text-sm font-semibold text-accent-800 underline"
-              >
-                See all similar mentors
-              </Link>
-            ) : undefined
-          }
-        />
-        {comparables === null ? (
-          <Callout tone="quiet">{COMPARABLES_UNAVAILABLE_NOTE}</Callout>
-        ) : (
-          <div className="space-y-5">
-            <ComparablesSummaryLine summary={comparables.summary} />
-            {comparables.summary.count > 0 ? (
-              <>
-                <PriceHistogram
-                  histogram={comparables.histogram}
-                  suggestedPrice={recommendation.recommended_price}
-                  currentPrice={recommendation.current_price}
-                  totalCount={comparables.summary.count}
-                />
-                <div>
-                  <h3 className="text-sm font-semibold text-ink">
-                    A few of them, at a glance
-                  </h3>
-                  <ComparableRows items={comparables.items} />
-                </div>
-              </>
-            ) : null}
-          </div>
-        )}
+        {summary.widened ? (
+          <Note tone="caution" className="mt-4">
+            {WIDENED_NOTE}
+          </Note>
+        ) : null}
       </Card>
 
       <Card>
-        <DecisionPanel
-          mentorId={mentorId}
-          recommendation={recommendation}
-          existingDecision={alreadyDecided}
-          onDecided={setDecision}
-        />
+        <h2 className="text-h3 font-semibold">Mentors like you</h2>
+        <div className="mt-2">
+          {prices.length > 0 ? (
+            <DotStrip
+              prices={prices}
+              scale={scale}
+              yours={recommendation.recommended_price}
+              yoursLabel="You"
+              sentence={`${summary.match_description}. Each dot is one of the ${prices.length} we compared you with.`}
+              tableCaption="What each similar mentor charges per session, in AUD"
+            />
+          ) : (
+            <p className="mt-2 text-ink-700">{NO_COMPARABLES_NOTE}</p>
+          )}
+        </div>
+        <p className="mt-4">
+          <TextLink href={`/similar/${recommendation.service_id}`}>
+            See all similar mentors
+          </TextLink>
+        </p>
       </Card>
     </div>
   );
 }
 
-/**
- * The figure the mentor came to read.
- *
- * Per mentee in large type, because that is what a mentee is quoted and what
- * a mentor compares with another mentor. The session total sits under it with
- * the range, labelled as the whole group, so a group session never reads as
- * though one mentee pays the lot.
- */
-function PriceHeadline({
-  recommendation,
-  service,
-}: {
-  recommendation: Recommendation;
-  service: Service | undefined;
-}) {
-  const maxMentees = service?.max_mentees ?? 1;
-  const single = isOneToOne(maxMentees);
+function PriceScreen({ mentor }: { mentor: Mentor }) {
+  const params = useParams<{ id: string }>();
+  const router = useRouter();
+  const recommendationId = Number.parseInt(params?.id ?? "", 10);
+  const [answered, setAnswered] = useState(false);
 
-  return (
-    <Card className="bg-white">
-      <p className="text-sm font-semibold uppercase tracking-wide text-accent-700">
-        Suggested price
-      </p>
-      <p className="tabular mt-2 text-figure font-bold text-ink">
-        {formatMoney(
-          single ? recommendation.recommended_price : recommendation.price_per_mentee,
-        )}
-      </p>
-      <p className="mt-1 text-lg font-medium text-ink-muted">
-        {single ? "per session" : "per mentee"}
-      </p>
-
-      <dl className="mt-6 grid gap-3 sm:grid-cols-2">
-        {single ? (
-          <div className="rounded-xl border border-line bg-shell p-4">
-            <dt className="text-sm text-ink-soft">Suggested range, per session</dt>
-            <dd className="tabular mt-1 text-lg font-semibold">
-              {formatRange(recommendation.price_low, recommendation.price_high)}
-            </dd>
-          </div>
-        ) : (
-          <>
-            <div className="rounded-xl border border-line bg-shell p-4">
-              <dt className="text-sm text-ink-soft">
-                Per session (whole group of up to {maxMentees})
-              </dt>
-              <dd className="tabular mt-1 text-lg font-semibold">
-                {formatMoney(recommendation.recommended_price)}
-              </dd>
-            </div>
-            <div className="rounded-xl border border-line bg-shell p-4">
-              <dt className="text-sm text-ink-soft">
-                Suggested range, per session (whole group)
-              </dt>
-              <dd className="tabular mt-1 text-lg font-semibold">
-                {formatRange(recommendation.price_low, recommendation.price_high)}
-              </dd>
-            </div>
-            <div className="rounded-xl border border-line bg-shell p-4 sm:col-span-2">
-              <dt className="text-sm text-ink-soft">Suggested range, per mentee</dt>
-              <dd className="tabular mt-1 text-lg font-semibold">
-                {formatRange(
-                  recommendation.price_per_mentee_low,
-                  recommendation.price_per_mentee_high,
-                )}
-              </dd>
-            </div>
-          </>
-        )}
-      </dl>
-
-      <p className="mt-5 text-sm leading-relaxed text-ink-muted">
-        This is a suggestion, not a decision. You can accept it, change it or decline it
-        below. All figures are in Australian dollars.
-      </p>
-    </Card>
+  const { status, data, error, reload } = useAsync(
+    (signal) => api.recommendation(recommendationId, signal),
+    `recommendation-${recommendationId}`,
   );
-}
 
-/** The suggestion against what the mentor charges today, when they charge anything. */
-function CurrentPriceCard({ recommendation }: { recommendation: Recommendation }) {
-  const current = recommendation.current_price;
-  const position = recommendation.position_vs_range;
-
-  if (current === null || position === null) {
+  if (!Number.isInteger(recommendationId)) {
     return (
-      <Card>
-        <SectionHeading title="Against your current price" />
-        <Callout tone="quiet">{NO_PRICE_SET}</Callout>
-      </Card>
+      <Column className="py-10">
+        <ErrorNotice
+          title="We could not find that price"
+          message="That link does not point at a price we hold."
+        />
+      </Column>
     );
   }
 
-  const tone = position === "within" ? "accent" : "caution";
+  if (status === "loading") {
+    return (
+      <Column className="py-10">
+        <LoadingBlock label="Loading your suggested price" />
+      </Column>
+    );
+  }
+
+  if (status === "error" || !data) {
+    return (
+      <Column className="py-10">
+        <ErrorNotice
+          title={
+            isNotFound(error)
+              ? "We could not find that price"
+              : "We could not load this"
+          }
+          message={
+            isNotFound(error)
+              ? "That price is not one of yours, or it no longer exists."
+              : messageFor(error)
+          }
+          onRetry={isNotFound(error) ? undefined : reload}
+        />
+      </Column>
+    );
+  }
+
+  const recommendation = data;
+  const decided = recommendation.decision ?? null;
 
   return (
-    <Card>
-      <SectionHeading title="Against your current price" />
-      <dl className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-line bg-shell p-4">
-          <dt className="text-sm text-ink-soft">You charge now, per session</dt>
-          <dd className="tabular mt-1 text-xl font-semibold">{formatMoney(current)}</dd>
+    <>
+      <section className="on-gradient bg-hero text-surface">
+        <div className="mx-auto grid w-full max-w-site items-center gap-10 px-4 pb-16 pt-10 sm:px-6 wide:grid-cols-2">
+          <div>
+            <Overline className="text-on-gradient-fine">Your suggestion</Overline>
+            <h1 className="mt-2 max-w-[14ch] text-balance font-display text-display">
+              Here is what we suggest,{" "}
+              <em className="accent-word">{firstNameOf(mentor.full_name)}</em>.
+            </h1>
+            <p className="mt-4 max-w-lead text-body-lg text-on-gradient-lead">
+              Based on your field, group size and skills, compared with similar mentors.
+            </p>
+          </div>
+
+          <RaisedCard className="mx-auto w-full max-w-[460px]">
+            <Overline>Suggested session price</Overline>
+            <p className="tabular mt-2.5 font-display text-figure">
+              {formatMoney(recommendation.recommended_price)}
+              <span className="ml-2 text-base font-semibold tracking-normal text-ink-500">
+                {sessionWords(recommendation)}
+              </span>
+            </p>
+            <p className="mt-1.5 font-medium text-ink-700">
+              Similar mentors charge {formatMoney(recommendation.price_low)} to{" "}
+              {formatMoney(recommendation.price_high)}
+            </p>
+            <p className="mt-4 text-ink-700">{ADVISORY_LINE}</p>
+
+            {recommendation.low_confidence ? (
+              <Note className="mt-4" title={LOW_CONFIDENCE_TITLE}>
+                {LOW_CONFIDENCE_NOTE}
+              </Note>
+            ) : (
+              <Note tone="info" className="mt-4">
+                {WITH_HISTORY_NOTE}
+              </Note>
+            )}
+
+            {decided ? (
+              <div className="mt-6">
+                <Chip tone={decided.action === "rejected" ? "declined" : "accepted"}>
+                  {decisionWord(decided.action)}
+                </Chip>
+                <p className="mt-3 text-ink-700">
+                  You have already answered this price
+                  {decided.final_price !== null
+                    ? `, and your price is now ${formatMoney(decided.final_price)}.`
+                    : "."}{" "}
+                  Ask for a fresh price from your dashboard if you want to decide again.
+                </p>
+                <p className="mt-3">
+                  <TextLink href="/dashboard">Go to your dashboard</TextLink>
+                </p>
+              </div>
+            ) : answered ? (
+              <p role="status" className="mt-6 text-ink-700">
+                Saved. Taking you to your dashboard.
+              </p>
+            ) : (
+              <DecisionPanel
+                recommendation={recommendation}
+                onDecided={() => {
+                  setAnswered(true);
+                  router.push("/dashboard");
+                }}
+              />
+            )}
+          </RaisedCard>
         </div>
-        <div className="rounded-xl border border-line bg-shell p-4">
-          <dt className="text-sm text-ink-soft">The suggestion against that</dt>
-          <dd className="tabular mt-1 text-xl font-semibold">
-            {formatPercent(recommendation.difference_vs_current_percent, {
-              signed: true,
-            })}
-          </dd>
-        </div>
-      </dl>
-      <div className="mt-4">
-        <Callout tone={tone} title={POSITION_HEADINGS[position]}>
-          {POSITION_MESSAGES[position]}
-        </Callout>
-      </div>
-    </Card>
+      </section>
+
+      <Column wide className="py-12">
+        <Comparisons recommendation={recommendation} />
+      </Column>
+    </>
   );
+}
+
+export default function RecommendationPage() {
+  return <RequireAuth>{(mentor) => <PriceScreen mentor={mentor} />}</RequireAuth>;
 }

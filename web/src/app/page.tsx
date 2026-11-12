@@ -1,141 +1,215 @@
-import type { Metadata } from "next";
-
-import { ButtonLink, Card } from "@/components/ui";
-import { BRAND } from "@/lib/copy";
-
-export const metadata: Metadata = {
-  title: "Pricing help for mentors",
-  description:
-    "Tell us about the session you offer and we suggest a price, with the prices similar mentors charge beside it. You decide what to charge.",
-};
+"use client";
 
 /**
- * The landing page.
+ * The landing page: bold register.
  *
- * Every claim on it is something the system actually does. There are no
- * testimonials, no counts of mentors and no accuracy figures, because none of
- * those exist to quote: this is a prototype, and a number put here to fill a
- * space would be invented.
+ * A full bleed hero gradient, one display headline with a single italic word,
+ * an example of what a mentor is about to be shown, three steps on soft
+ * tinted cards, three real mentors from the public directory, and a closing
+ * band. The example price card is example content and says so: live figures
+ * belong to a mentor who has answered the form.
  */
+
+import { MentorCardTile } from "@/components/mentor-card";
+import { PriceLadder } from "@/components/price-ladder";
+import {
+  ButtonLink,
+  Column,
+  EmptyState,
+  ErrorNotice,
+  LoadingBlock,
+  Note,
+  Overline,
+  RaisedCard,
+  TextLink,
+} from "@/components/ui";
+import { api } from "@/lib/api-client";
+import { ADVISORY_LINE, LOW_CONFIDENCE_NOTE, LOW_CONFIDENCE_TITLE } from "@/lib/copy";
+import { messageFor } from "@/lib/errors";
+import { useAsync } from "@/lib/use-async";
+
+/**
+ * The figures on the example card.
+ *
+ * Fixed, and labelled as an example on the card itself. A number pulled from
+ * the API here would be one mentor's price presented as everybody's.
+ */
+const EXAMPLE = {
+  price: 185,
+  low: 126,
+  high: 276,
+  scale: { min: 90, max: 420 },
+};
 
 const STEPS = [
   {
-    title: "You tell us about your service",
-    body: "Your field, how many mentees can join one session, the smallest booking you accept, and the skills and topics you cover. That is the whole of it.",
+    step: "Step 1",
+    title: "Tell us what you offer",
+    body: "Your field, how many people you mentor at once, and the skills you cover.",
+    tint: "bg-tint-indigo",
   },
   {
-    title: "We suggest a price, and show you the market",
-    body: "You get a suggested price with a range around it, and beside it what mentors in your field at about your group size charge, as a spread rather than a single number.",
+    step: "Step 2",
+    title: "See your suggested price",
+    body: "One number, the range around it, and how it compares with mentors like you.",
+    tint: "bg-tint-blue",
   },
   {
-    title: "You accept, change or decline",
-    body: "The suggestion is advice. Take it, set your own figure instead, or leave it. Whatever you settle on is what your service charges, and we keep the record of what was suggested against what you chose.",
+    step: "Step 3",
+    title: "Accept, change or decline",
+    body: "It is your call. Come back any time to see how your price sits over the months.",
+    tint: "bg-tint-violet",
   },
 ];
 
-const FACTS = [
-  {
-    title: "New mentors get a first estimate",
-    body: "With no sessions behind you there is no record to read, so your first suggestion comes from what you entered and is labelled as the estimate it is. It sharpens as you build a record.",
-  },
-  {
-    title: "Established mentors are priced on their record",
-    body: "Once you have ratings and booking history, the suggestion takes those into account as well, which is why it can sit away from the middle of the market.",
-  },
-  {
-    title: "A price, never a wage",
-    body: "We suggest what one session could be worth next to comparable mentors. We do not report earnings or income, because the number of sessions you will sell is not something we know.",
-  },
-];
+function MentorsAlreadyHere() {
+  const { status, data, error, reload } = useAsync(
+    (signal) => api.directory({ limit: 3 }, signal),
+    "landing-mentors",
+  );
+
+  if (status === "loading") {
+    return <LoadingBlock label="Loading mentors" />;
+  }
+
+  if (status === "error") {
+    return (
+      <ErrorNotice
+        title="We could not load the mentors"
+        message={messageFor(error)}
+        onRetry={reload}
+      />
+    );
+  }
+
+  const mentors = data?.items ?? [];
+  if (mentors.length === 0) {
+    return (
+      <EmptyState title="No mentors are listed yet">
+        Be the first. Register, and your profile appears here straight away.
+      </EmptyState>
+    );
+  }
+
+  return (
+    <div className="grid gap-6 mid:grid-cols-2 lg:grid-cols-3">
+      {mentors.map((mentor) => (
+        <MentorCardTile key={mentor.id} mentor={mentor} />
+      ))}
+    </div>
+  );
+}
 
 export default function LandingPage() {
   return (
-    <div className="space-y-12">
-      <section className="pt-2">
-        <p className="text-sm font-semibold uppercase tracking-wide text-accent-700">
-          {BRAND}
-        </p>
-        <h1 className="mt-3 max-w-prose text-display font-bold">
-          Know what to charge for a mentoring session.
-        </h1>
-        <p className="mt-5 max-w-prose text-lg leading-relaxed text-ink-muted">
-          {BRAND} is for people who mentor others through their career and are paid for
-          it. Describe the session you offer and we suggest a price for it, in
-          Australian dollars, with the prices comparable mentors charge beside it. The
-          suggestion is advice. You decide what to charge.
-        </p>
-        <div className="mt-8 flex flex-wrap gap-3">
-          <ButtonLink href="/register">Become a mentor</ButtonLink>
-          <ButtonLink href="/mentors" tone="secondary">
-            I am already a mentor
-          </ButtonLink>
-        </div>
-      </section>
-
-      <section aria-labelledby="how-it-works">
-        <h2 id="how-it-works" className="text-2xl font-bold tracking-tight">
-          How the pricing suggestion works
-        </h2>
-        <ol className="mt-5 grid gap-4 sm:grid-cols-3">
-          {STEPS.map((step, index) => (
-            <li key={step.title}>
-              <Card className="h-full">
-                <span
-                  aria-hidden="true"
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-50 text-base font-bold text-accent-800"
-                >
-                  {index + 1}
-                </span>
-                <h3 className="mt-4 text-lg font-semibold">{step.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-ink-muted">
-                  {step.body}
-                </p>
-              </Card>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section aria-labelledby="what-to-expect">
-        <h2 id="what-to-expect" className="text-2xl font-bold tracking-tight">
-          What to expect from the suggestion
-        </h2>
-        <dl className="mt-5 grid gap-4 sm:grid-cols-3">
-          {FACTS.map((fact) => (
-            <div
-              key={fact.title}
-              className="rounded-xl2 border border-line bg-white p-5"
-            >
-              <dt className="font-semibold">{fact.title}</dt>
-              <dd className="mt-2 text-sm leading-relaxed text-ink-muted">
-                {fact.body}
-              </dd>
+    <>
+      <section className="on-gradient bg-hero text-surface">
+        <div className="mx-auto grid w-full max-w-site items-center gap-8 px-4 pb-14 pt-8 sm:px-6 wide:grid-cols-[1.1fr_0.9fr] wide:gap-12 wide:pb-20 wide:pt-12">
+          <div>
+            <h1 className="max-w-[12ch] text-balance font-display text-display mid:text-display-xl">
+              Know what your time is <em className="accent-word">worth</em>.
+            </h1>
+            <p className="mt-6 max-w-lead text-body-lg text-on-gradient-lead">
+              Tell us about your sessions. Get a suggested price, and see what mentors
+              like you charge.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <ButtonLink href="/register" variant="white">
+                Get my price
+              </ButtonLink>
+              <TextLink href="/login" onGradient>
+                I am an existing mentor
+              </TextLink>
             </div>
-          ))}
-        </dl>
-      </section>
+            <p className="mt-5 text-small text-on-gradient-fine">
+              Free to try. You set the final price.
+            </p>
+          </div>
 
-      <section
-        aria-labelledby="get-started"
-        className="rounded-xl2 border border-accent-200 bg-accent-50 p-6 sm:p-8"
-      >
-        <h2
-          id="get-started"
-          className="text-2xl font-bold tracking-tight text-accent-900"
-        >
-          Ready to see a price?
-        </h2>
-        <p className="mt-3 max-w-prose leading-relaxed text-accent-900">
-          Registering takes three short steps and ends with a suggested price for your
-          first service. There is no payment and nothing to cancel.
-        </p>
-        <div className="mt-6 flex flex-wrap gap-3">
-          <ButtonLink href="/register">Become a mentor</ButtonLink>
-          <ButtonLink href="/mentors" tone="quiet">
-            Open an existing mentor
-          </ButtonLink>
+          <RaisedCard
+            role="group"
+            aria-label="Example price suggestion"
+            className="mx-auto w-full max-w-[440px]"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Overline>Suggested session price</Overline>
+              <span className="rounded-pill bg-accent-100 px-3 py-1 text-label font-semibold text-accent-800">
+                Example
+              </span>
+            </div>
+            <p className="tabular mt-2.5 font-display text-figure">
+              ${EXAMPLE.price}
+              <span className="ml-2 text-base font-semibold tracking-normal text-ink-500">
+                AUD
+              </span>
+            </p>
+            <p className="mt-1.5 font-medium text-ink-700">
+              Similar mentors charge ${EXAMPLE.low} to ${EXAMPLE.high}
+            </p>
+            <div className="mt-4">
+              <PriceLadder
+                scale={EXAMPLE.scale}
+                bandLow={EXAMPLE.low}
+                bandHigh={EXAMPLE.high}
+                suggested={EXAMPLE.price}
+                sentence={`In this example the suggested $${EXAMPLE.price} sits in the middle of what similar mentors charge, $${EXAMPLE.low} to $${EXAMPLE.high}.`}
+                tableCaption="The figures in this example"
+              />
+            </div>
+            <p className="mt-4 text-ink-700">{ADVISORY_LINE}</p>
+            <Note className="mt-4" title={LOW_CONFIDENCE_TITLE}>
+              {LOW_CONFIDENCE_NOTE}
+            </Note>
+            <p className="mt-4 text-small text-ink-500">
+              This is an example, not a price for anybody. Yours arrives after four
+              short questions.
+            </p>
+          </RaisedCard>
         </div>
       </section>
-    </div>
+
+      <section className="glow-field">
+        <Column wide className="relative py-14">
+          <h2 className="mb-10 max-w-[16ch] text-balance font-display text-display">
+            Three steps to a price you can defend.
+          </h2>
+          <div className="grid gap-6 mid:grid-cols-2 lg:grid-cols-3">
+            {STEPS.map((step) => (
+              <div key={step.step} className={`min-w-0 rounded-card p-6 ${step.tint}`}>
+                <p className="text-overline uppercase text-ink-500">{step.step}</p>
+                <h3 className="my-2 text-h3 font-semibold">{step.title}</h3>
+                <p className="max-w-[34ch] text-ink-700">{step.body}</p>
+              </div>
+            ))}
+          </div>
+        </Column>
+      </section>
+
+      <Column wide className="py-10">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <h2 className="max-w-[14ch] text-balance font-display text-display">
+            Mentors already here.
+          </h2>
+          <TextLink href="/mentors">Browse all mentors</TextLink>
+        </div>
+        <MentorsAlreadyHere />
+      </Column>
+
+      <Column wide className="pb-14">
+        <div className="on-gradient rounded-band bg-closing px-6 py-10 text-surface mid:px-8 mid:py-14">
+          <h2 className="max-w-[18ch] text-balance font-display text-display">
+            Start with your first price.
+          </h2>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <ButtonLink href="/register" variant="white">
+              Register
+            </ButtonLink>
+            <ButtonLink href="/login" variant="outlineDark">
+              Existing mentor
+            </ButtonLink>
+          </div>
+        </div>
+      </Column>
+    </>
   );
 }

@@ -2,45 +2,191 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Every colour, gradient, radius and shadow in the product, declared once.
+ *
+ * Tailwind reads these through tailwind.config.ts, so a class name and a
+ * var() reference resolve to the same value. Charts draw straight from the
+ * custom properties, which is why they are declared here rather than only in
+ * the Tailwind theme: an SVG fill cannot read a Tailwind class.
+ */
+:root {
+  color-scheme: light;
+
+  /* Ink and surface */
+  --ink-900: #0b0b0f;
+  --ink-700: #3f3f4a;
+  --ink-500: #55555f;
+  --surface: #ffffff;
+  --surface-sunk: #f7f7f9;
+  --line: #e4e4e9;
+  --line-strong: #c9c9d2;
+
+  /* Accent, and the one second hue, which is for inline links only */
+  --accent-700: #4338ca;
+  --accent-800: #312e81;
+  --accent-100: #eef2ff;
+  --link-700: #0f766e;
+  --link-800: #115e59;
+
+  /* Status */
+  --danger-700: #b3261e;
+  --danger-fill: #fff1f0;
+  --success-700: #16704f;
+  --success-fill: #edf7f2;
+  --caution-700: #8a5207;
+  --caution-fill: #fff8e8;
+
+  /* Soft tints, for cards on calm screens. Ink text only. */
+  --tint-indigo: #e0e7ff;
+  --tint-blue: #dbeafe;
+  --tint-violet: #ede9fe;
+  --tint-cyan: #cffafe;
+
+  /* Text on the gradient. The tinted two stay on the dark indigo area. */
+  --on-gradient-lead: #e0e7ff;
+  --on-gradient-fine: #c7d2fe;
+  --gradient-dark: #1e1b8f;
+
+  /* Chart */
+  --chart-track: #f1f1f4;
+  --chart-band: #bae6fd;
+  --chart-band-edge: #0369a1;
+  --chart-grid: #ededf1;
+
+  /* The three gradient recipes, one property each */
+  --hero-gradient:
+    radial-gradient(45% 55% at 100% 100%, rgba(217, 70, 166, 0.75), transparent 70%),
+    radial-gradient(45% 60% at 80% 55%, rgba(6, 182, 212, 0.7), transparent 70%),
+    radial-gradient(50% 60% at 45% 115%, rgba(124, 58, 237, 0.9), transparent 70%),
+    linear-gradient(135deg, #1e1b8f 0%, #4338ca 50%, #2563eb 100%);
+  --banner-gradient: linear-gradient(120deg, #1e1b8f, #4338ca 60%, #2563eb);
+  --closing-gradient: linear-gradient(120deg, #312e81, #4338ca 55%, #1d4ed8);
+
+  /* The two decorative glow hues. Never text, never a chart mark. */
+  --glow-blue: #2563eb;
+  --glow-violet: #7c3aed;
+
+  --shadow-card:
+    0 1px 2px rgba(11, 11, 15, 0.04), 0 8px 24px -12px rgba(11, 11, 15, 0.18);
+
+  --ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --header-height: 72px;
+}
+
 @layer base {
-  :root {
-    color-scheme: light;
+  * {
+    box-sizing: border-box;
   }
 
   html {
     -webkit-text-size-adjust: 100%;
+    scroll-padding-top: var(--header-height);
   }
 
   body {
-    @apply bg-shell text-ink antialiased;
-    font-feature-settings: "cv05" 1;
+    background: var(--surface);
+    color: var(--ink-900);
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    font-size: 1rem;
+    line-height: 1.55;
+    /* A glow sits outside the content column by design, so it must not be
+       able to create a sideways scrollbar. */
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    margin: 0;
   }
 
   /*
-   * One visible focus style for everything. The default ring is removed by
-   * Tailwind's reset in places, and a keyboard user who cannot see where they
-   * are cannot use the form at all.
+   * One visible focus style for everything, and an inverted one on the
+   * gradient. Never removed without a replacement of at least equal
+   * visibility.
    */
   :focus-visible {
-    @apply outline-none ring-2 ring-accent-600 ring-offset-2 ring-offset-white;
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--surface),
+      0 0 0 4px var(--accent-700);
+    border-radius: 12px;
   }
 
-  /* Numbers line up in columns, which is what a price table is for. */
-  .tabular {
-    font-variant-numeric: tabular-nums;
+  .on-gradient :focus-visible {
+    box-shadow:
+      0 0 0 2px var(--gradient-dark),
+      0 0 0 4px var(--surface);
+  }
+
+  /* A control inside a white card reverts to the indigo ring, even when the
+     card itself is sitting on the gradient. */
+  .on-gradient .on-surface :focus-visible {
+    box-shadow:
+      0 0 0 2px var(--surface),
+      0 0 0 4px var(--accent-700);
+  }
+}
+
+@layer components {
+  /* The display face carries one or two italic serif words, never more. */
+  .accent-word {
+    font-family: var(--font-accent), Georgia, serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 1.06em;
+    letter-spacing: -0.01em;
+  }
+
+  /*
+   * Two soft glows behind the tinted step cards on the landing page. Both are
+   * clear of every line of text, and neither can be clicked.
+   */
+  .glow-field {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .glow-field::before,
+  .glow-field::after {
+    content: "";
+    position: absolute;
+    width: 420px;
+    height: 420px;
+    border-radius: 50%;
+    filter: blur(110px);
+    opacity: 0.28;
+    pointer-events: none;
+  }
+
+  .glow-field::before {
+    left: -160px;
+    top: -60px;
+    background: var(--glow-blue);
+  }
+
+  .glow-field::after {
+    right: -160px;
+    bottom: -120px;
+    background: var(--glow-violet);
   }
 }
 
 @layer utilities {
-  /* Read by a screen reader, never drawn. Used for chart summaries. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
   .sr-only-focusable:focus {
-    @apply not-sr-only fixed left-4 top-4 z-50 rounded-lg bg-white px-4 py-2 shadow-card;
+    @apply not-sr-only fixed left-4 top-4 z-50 rounded-field bg-surface px-4 py-2 shadow-card;
   }
 }
 
 /*
- * Respect the system setting. Recharts animates by default and the stepper
- * and panels transition, and for some people that is not a nicety.
+ * Respect the system setting. The gradient is static in any case; this is for
+ * the disclosures, the stepper and the charts.
  */
 @media (prefers-reduced-motion: reduce) {
   *,

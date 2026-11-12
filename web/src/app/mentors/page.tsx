@@ -1,108 +1,197 @@
 "use client";
 
 /**
- * Pick a mentor to act as.
+ * The directory: calm.
  *
- * This page exists because there is no authentication. The mentors listed are
- * the ones created for the demonstration, each with a track record behind
- * them, which is the only way to see the half of the system that prices a
- * mentor on their own history rather than on a form.
+ * Public, so a visitor can read it before they have an account and a mentor
+ * can see their own card on it. Newest first, which is what makes it worth
+ * reading: a mentor who registered a minute ago is listed on the same terms
+ * as anybody else, with their verification shown as what it is.
  *
- * It is the one mentor-related request that carries no identity header: it is
- * the list an identity is chosen from.
+ * Paging is a Load more button rather than numbered pages. The list is read
+ * downwards, and a second page that replaced the first would lose where the
+ * reader was.
  */
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { MentorCardTile } from "@/components/mentor-card";
 import {
-  Badge,
-  Card,
+  Banner,
+  Button,
+  Column,
   EmptyState,
   ErrorNotice,
   LoadingBlock,
-  PageHeading,
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
-import type { DemoMentor } from "@/lib/api-types";
+import type { MentorCard, Option } from "@/lib/api-types";
 import { messageFor } from "@/lib/errors";
-import { writeMentorId } from "@/lib/mentor-session";
 import { useAsync } from "@/lib/use-async";
 
-export default function MentorsPage() {
-  const router = useRouter();
-  const mentors = useAsync<DemoMentor[]>((signal) => api.demoMentors(signal), "demo");
-  const [chosen, setChosen] = useState<number | null>(null);
+const PAGE_SIZE = 12;
 
-  function choose(mentor: DemoMentor) {
-    setChosen(mentor.id);
-    writeMentorId(mentor.id, mentor.display_name);
-    router.push("/dashboard");
+function FieldFilters({
+  fields,
+  chosen,
+  onChoose,
+}: {
+  fields: Option[];
+  chosen: string;
+  onChoose: (field: string) => void;
+}) {
+  const all: Option[] = [{ id: "", label: "All fields" }, ...fields];
+  return (
+    <div className="flex flex-wrap gap-2" role="group" aria-label="Filter by field">
+      {all.map((field) => (
+        <button
+          key={field.id || "all"}
+          type="button"
+          aria-pressed={chosen === field.id}
+          onClick={() => onChoose(field.id)}
+          className={`min-h-[44px] cursor-pointer rounded-pill border px-4 py-2 text-[0.9375rem] font-semibold transition-colors duration-[180ms] ease-entrance mid:min-h-[40px] ${
+            chosen === field.id
+              ? "border-accent-700 bg-accent-100 text-accent-800"
+              : "border-line bg-surface text-ink-700 hover:bg-surface-sunk"
+          }`}
+        >
+          {field.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export default function MentorsPage() {
+  const options = useAsync((signal) => api.options(signal), "directory-options");
+
+  const [field, setField] = useState("");
+  const [mentors, setMentors] = useState<MentorCard[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  // Bumped by the retry button, so asking again with the same filter asks
+  // again rather than doing nothing.
+  const [attempt, setAttempt] = useState(0);
+
+  const load = useCallback(
+    async (chosenField: string, offset: number, signal?: AbortSignal) => {
+      const page = await api.directory(
+        {
+          field: chosenField || undefined,
+          limit: PAGE_SIZE,
+          offset,
+        },
+        signal,
+      );
+      return page;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let live = true;
+    setLoading(true);
+    setFailure(null);
+
+    load(field, 0, controller.signal)
+      .then((page) => {
+        if (live) {
+          setMentors(page.items);
+          setTotal(page.total);
+          setLoading(false);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!live || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
+        }
+        setFailure(messageFor(error));
+        setLoading(false);
+      });
+
+    return () => {
+      live = false;
+      controller.abort();
+    };
+  }, [field, load, attempt]);
+
+  async function loadMore() {
+    setLoadingMore(true);
+    try {
+      const page = await load(field, mentors.length);
+      setMentors((was) => [...was, ...page.items]);
+      setTotal(page.total);
+    } catch (error) {
+      setFailure(messageFor(error));
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   return (
-    <div>
-      <PageHeading
-        title="Open an existing mentor"
-        lead="These mentors already have ratings and booking history, so their suggestions are worked out from their record rather than from a form. Choose one to see their page."
+    <>
+      <Banner
+        title="Browse mentors"
+        lead="See who is here and what they charge for a session."
       />
+      <Column wide className="py-10">
+        {options.status === "ready" && options.data ? (
+          <FieldFilters
+            fields={options.data.fields}
+            chosen={field}
+            onChoose={setField}
+          />
+        ) : null}
 
-      {mentors.status === "loading" ? <LoadingBlock label="Loading mentors" /> : null}
+        <p className="mt-4 text-small text-ink-500" aria-live="polite">
+          {loading
+            ? "Loading mentors"
+            : `Showing ${mentors.length} of ${total} ${total === 1 ? "mentor" : "mentors"}`}
+        </p>
 
-      {mentors.status === "error" ? (
-        <ErrorNotice message={messageFor(mentors.error)} onRetry={mentors.reload} />
-      ) : null}
+        <div className="mt-4">
+          {loading ? <LoadingBlock label="Loading mentors" /> : null}
 
-      {mentors.status === "ready" && (mentors.data?.length ?? 0) === 0 ? (
-        <EmptyState title="There are no mentors to open yet">
-          The demonstration mentors have not been created on this server. Someone needs
-          to run the seed step, or you can register as a new mentor instead.
-        </EmptyState>
-      ) : null}
+          {!loading && failure ? (
+            <ErrorNotice
+              message={failure}
+              onRetry={() => setAttempt((count) => count + 1)}
+            />
+          ) : null}
 
-      {mentors.status === "ready" && mentors.data ? (
-        <ul className="grid gap-4 sm:grid-cols-2">
-          {mentors.data.map((mentor) => (
-            <li key={mentor.id}>
-              <Card className="flex h-full flex-col justify-between gap-4">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-lg font-semibold">{mentor.display_name}</h2>
-                    {mentor.has_history ? (
-                      <Badge tone="accent">Has a track record</Badge>
-                    ) : null}
-                  </div>
-                  {mentor.headline ? (
-                    <p className="mt-2 text-sm leading-relaxed text-ink-muted">
-                      {mentor.headline}
-                    </p>
-                  ) : null}
-                  <dl className="mt-4 space-y-1 text-sm">
-                    <div className="flex gap-2">
-                      <dt className="text-ink-soft">Field</dt>
-                      <dd className="font-medium">{mentor.field_label}</dd>
-                    </div>
-                    <div className="flex gap-2">
-                      <dt className="text-ink-soft">Session</dt>
-                      <dd className="font-medium">{mentor.session_label}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => choose(mentor)}
-                  disabled={chosen !== null}
-                  className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-accent-700 px-5 font-semibold text-white hover:bg-accent-800 disabled:opacity-60"
-                >
-                  {chosen === mentor.id
-                    ? "Opening their page"
-                    : `Continue as ${mentor.display_name}`}
-                </button>
-              </Card>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
+          {!loading && !failure && mentors.length === 0 ? (
+            <EmptyState title="No mentors to show yet">
+              {field
+                ? "No one mentors in that field yet. Choose All fields to see everybody."
+                : "Nobody has registered yet. Be the first and your card appears here straight away."}
+            </EmptyState>
+          ) : null}
+
+          {!loading && mentors.length > 0 ? (
+            <div className="grid gap-6 mid:grid-cols-2 lg:grid-cols-3">
+              {mentors.map((mentor) => (
+                <MentorCardTile key={mentor.id} mentor={mentor} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        {!loading && mentors.length < total ? (
+          <div className="mt-8">
+            <Button
+              variant="quiet"
+              onClick={loadMore}
+              disabled={loadingMore}
+              aria-busy={loadingMore}
+            >
+              {loadingMore ? "Loading" : "Load more"}
+            </Button>
+          </div>
+        ) : null}
+      </Column>
+    </>
   );
 }
