@@ -1365,10 +1365,20 @@ class DashboardHeadlineOut(BaseModel):
     """
     The one line at the top of the mentor's page, and the figures behind it.
 
-    Built for the mentor's main service, which is the first one they
-    published. A page that opened with eight numbers and no sentence would
-    leave the mentor to work out what they mean, and the sentence is the thing
-    they came for: am I charging roughly what other people like me charge.
+    Built for one service: the one whose price the mentor most recently
+    settled on, or the one they registered with if they have never settled on
+    any. A mentor who has just added a service and answered its price opens
+    this page to see that price, so the page follows them rather than staying
+    on whichever service happens to be the oldest.
+
+    Which service that was is named here, in ``service_id`` and the three
+    labels beside it, for two reasons: a mentor offering more than one needs
+    to read which of their prices this is, and a frontend drawing the
+    comparison needs to draw it for the same service rather than for a guess.
+
+    A page that opened with eight numbers and no sentence would leave the
+    mentor to work out what they mean, and the sentence is the thing they came
+    for: am I charging roughly what other people like me charge.
 
     ``sentence`` is written on the server, in plain words, so that the one
     statement the page makes about a mentor's price cannot be assembled
@@ -1376,6 +1386,28 @@ class DashboardHeadlineOut(BaseModel):
     model terms.
     """
 
+    service_id: int | None = Field(
+        default=None,
+        description=(
+            "Which service this block is about, or null when the mentor has "
+            "none yet."
+        ),
+    )
+    service_label: str | None = Field(
+        default=None,
+        description="That service's field, as a mentor reads it.",
+        examples=["Technology and software"],
+    )
+    session_label: str | None = Field(
+        default=None,
+        description="Whether that service is one to one or a group.",
+        examples=["One to one"],
+    )
+    max_mentees: int | None = Field(
+        default=None,
+        description="How many people join one of those sessions.",
+        examples=[1],
+    )
     your_price: int | None = Field(
         default=None,
         description=(

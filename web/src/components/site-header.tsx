@@ -84,6 +84,7 @@ export function SiteHeader() {
             <>
               {navLink("/mentors", "Mentors")}
               {navLink("/dashboard", "Dashboard")}
+              {navLink("/about", "About")}
               {/* The outlined pill has a hover state built for the surface it
                   is on. A quiet pill recoloured for the gradient would keep
                   the light hover fill underneath its white label. */}
@@ -102,6 +103,10 @@ export function SiteHeader() {
               <span className="hidden mid:inline">
                 {navLink("/mentors", "Browse mentors")}
               </span>
+              {/* About stays at every width. There is no mobile menu to put
+                  it behind, and a page that explains where the price comes
+                  from is not the one to hide on a phone. */}
+              {navLink("/about", "About")}
               <ButtonLink
                 href="/login"
                 small

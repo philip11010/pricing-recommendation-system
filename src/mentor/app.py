@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
@@ -2206,6 +2207,55 @@ def demand_of(
     )
 
 
+# ---------------------------------------------------------------------------
+# Which service the mentor's page opens about
+#
+# The page opens with one price, and a mentor who offers three services has
+# three. The one it opens with is the one they most recently settled on,
+# because settling on a price is the act this whole system exists to record:
+# a mentor who has just added a service and answered its price is looking at
+# the page to see that price, and a page still reporting the service they
+# registered with in 2024 looks to them like the answer was lost.
+#
+# "Settled" means a decision that names a price, which is an acceptance, a
+# modification, or a rejection that said what the mentor charges instead. A
+# rejection naming nothing settles nothing and does not move the page.
+#
+# A mentor who has never settled on any price keeps the service they
+# registered with, which is the only one there is anything to say about.
+# ---------------------------------------------------------------------------
+def settled_at(service: Service) -> datetime | None:
+    """When this service's price was last settled by the mentor, if ever."""
+    moments = [
+        record.decision.decided_at
+        for record in service.recommendations
+        if record.decision is not None and record.decision.final_price is not None
+    ]
+    return max(moments) if moments else None
+
+
+def headline_service_of(mentor: Mentor) -> Service | None:
+    """
+    The service the dashboard's headline, comparison and demand are about.
+
+    The most recently settled one, with the newer service taking it when two
+    were settled in the same moment, which is what happens when a test or a
+    script answers two prices in one breath.
+    """
+    if not mentor.services:
+        return None
+    settled = [
+        (moment, service.id, service)
+        for service, moment in (
+            (service, settled_at(service)) for service in mentor.services
+        )
+        if moment is not None
+    ]
+    if settled:
+        return max(settled, key=lambda entry: (entry[0], entry[1]))[2]
+    return mentor.services[0]
+
+
 def headline_of(
     mentor: Mentor,
     service: Service | None,
@@ -2219,9 +2269,20 @@ def headline_of(
     answers is how the mentor compares with other people, and the quartiles
     are the range a typical one of them charges. The advised range is reported
     per service, on the recommendation itself, where it belongs.
+
+    Every answer names the service it is about, so a mentor with more than
+    one can see which of their prices the page is reporting, and so a frontend
+    can draw the comparison for that same service rather than guessing at one.
     """
     if service is None:
         return DashboardHeadlineOut(sentence=NO_SERVICE_SENTENCE)
+
+    about = {
+        "service_id": service.id,
+        "service_label": mapping.field_label(service.field),
+        "session_label": mapping.SESSION_LABELS[service.session_label],
+        "max_mentees": service.max_mentees,
+    }
 
     found = comparables_for(table, service, mentor) if table is not None else None
     summary = comparables_module.summarise(found) if found is not None else None
@@ -2232,6 +2293,7 @@ def headline_of(
         return DashboardHeadlineOut(
             your_price=price,
             sentence=(NO_PRICE_SENTENCE if not price else NO_COMPARISON_SENTENCE),
+            **about,
         )
 
     phrase = comparison_phrase(found, service)
@@ -2244,6 +2306,7 @@ def headline_of(
                     phrase=phrase, price=typical, currency=mapping.CURRENCY
                 )
             ),
+            **about,
         )
 
     low = summary["p25_price"] or typical
@@ -2260,6 +2323,7 @@ def headline_of(
         similar_typical=typical,
         position_vs_range=position,
         sentence=sentence,
+        **about,
     )
 
 
@@ -2311,19 +2375,21 @@ async def read_dashboard(
     every_record = [
         record for service in mentor.services for record in service.recommendations
     ]
+    # One service for all three blocks that are about a single one, so the
+    # headline figure, the sentence beside it and the demand card can never
+    # describe three different services.
+    main = headline_service_of(mentor)
 
     return DashboardOut(
         mentor_id=mentor.id,
         display_name=mentor.full_name,
         average_rating=average_rating_of(mentor),
-        headline=headline_of(
-            mentor, mentor.services[0] if mentor.services else None, table
-        ),
+        headline=headline_of(mentor, main, table),
         currency=mapping.CURRENCY,
         comparables_available=table is not None,
         demand=demand_of(
             mentor,
-            mentor.services[0] if mentor.services else None,
+            main,
             session.get(MentorHistory, mentor.id),
             table,
         ),

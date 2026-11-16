@@ -43,6 +43,22 @@ export function forgetMentor(): void {
   inFlight = null;
 }
 
+/**
+ * Ask the API for the signed in mentor again, replacing what is held.
+ *
+ * The record kept here includes the mentor's services, and adding one makes
+ * it out of date. Nothing re-reads it on its own, because the point of the
+ * cache is that three parts of a page do not ask the same question three
+ * times, so whatever changed the record says so by calling this.
+ */
+export function refreshMentor(): Promise<Mentor | null> {
+  forgetMentor();
+  return loadMentor().then((found) => {
+    announce();
+    return found;
+  });
+}
+
 /** The signed in mentor, fetched at most once while a page is open. */
 export function loadMentor(): Promise<Mentor | null> {
   if (!readToken()) {

@@ -265,11 +265,35 @@ test("a group of more than one is never described against a one to one", async (
   expect(said).toMatch(/typical group of \d+ among similar mentors/);
 });
 
+test("the comparisons are read before the account of the price", async ({ page }) => {
+  await requireApi({ comparables: true });
+
+  await registerMentor(page);
+  await readyCard(page);
+
+  // A mentor reads the number, then asks whether it is a normal number for
+  // somebody like them, and only then asks how it was arrived at. So the two
+  // comparisons come first and the account follows them.
+  const headings = await page
+    .locator("#main h2")
+    .filter({
+      hasText: /^(Where your price sits|Mentors like you|Why we suggest this price)$/,
+    })
+    .allTextContents();
+
+  expect(headings).toEqual([
+    "Where your price sits",
+    "Mentors like you",
+    "Why we suggest this price",
+  ]);
+});
+
 test("a new mentor is shown no demand card on their own page", async ({ page }) => {
   await requireApi({ comparables: true });
 
-  // Nothing has been measured about them, so there is nothing to compare.
-  // An empty card reading zero per cent would be a claim nobody observed.
+  // Nothing has been recorded about their months, so there is nothing to
+  // draw. An empty chart would say their time went untaken rather than
+  // unrecorded, which is a different claim.
   await registerMentor(page);
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: /^Hello, / })).toBeVisible();

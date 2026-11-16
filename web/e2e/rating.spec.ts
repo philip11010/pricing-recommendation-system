@@ -16,7 +16,7 @@ import { API_URL, registerMentor, requireApi } from "./helpers";
  * rather than month by month, so there is nothing honest to draw over time
  * and nothing here looks for one.
  */
-const RATING = /\d\.\d out of 5/;
+const RATING = /\d\.\d\/5/;
 
 test("a mentor with no rating is shown no rating at all", async ({ page }) => {
   await requireApi();
@@ -28,7 +28,7 @@ test("a mentor with no rating is shown no rating at all", async ({ page }) => {
   const card = page.locator("article").filter({ hasText: name }).first();
   await expect(card).toBeVisible();
   await expect(card.getByText(RATING)).toHaveCount(0);
-  await expect(card.getByText("0 out of 5")).toHaveCount(0);
+  await expect(card.getByText("0.0/5")).toHaveCount(0);
   await expect(card.getByText("No reviews yet")).toBeVisible();
 
   await card.getByRole("link", { name }).click();
@@ -73,7 +73,7 @@ test("a rated mentor's profile shows the rating, to one decimal place", async ({
 
   await page.goto(`/mentors/${rated?.id}`);
 
-  const shown = `${(rated?.average_rating as number).toFixed(1)} out of 5`;
+  const shown = `${(rated?.average_rating as number).toFixed(1)}/5`;
   await expect(page.getByText(shown)).toBeVisible();
 
   // One figure, never a series: nothing on the page offers a rating over time.

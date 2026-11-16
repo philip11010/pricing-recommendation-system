@@ -632,7 +632,7 @@ Mobile first. Breakpoints 375, 560, 640, 768, 900, 1024, 1440, tested at each.
 ## 12. Screens
 
 Eight screens, each assigned to one register. The mockup routes them by hash in
-the order below.
+the order below. About, in 12.10, was added after the mockup and is not in it.
 
 ### 12.1 Landing, bold
 
@@ -641,8 +641,8 @@ with the headline, the lead, a white primary pill to register and a text link
 for an existing mentor, beside an example price card. Below the hero: a three
 step explanation on soft tinted cards over two soft glows, a row of three mentor
 cards with a link to the full directory, a closing gradient band with two pill
-buttons, and a one-line footer that restates that the price is advisory and in
-Australian dollars.
+buttons, and the site footer in 12.11, which still carries the line restating
+that the price is advisory and in Australian dollars.
 
 ### 12.2 Log in, bold
 
@@ -750,13 +750,97 @@ it covers. Submitting goes to the price screen.
 The header is dark on bold screens and white with a bottom border on calm
 screens. The brand mark sits left, the navigation right.
 
-**Visitors** see: Browse mentors, Existing mentor as an outlined pill, Register
-as a solid pill. The text link collapses first on a phone; the two pills do not.
+**Visitors** see: Browse mentors, About, Existing mentor as an outlined pill,
+Register as a solid pill. Browse mentors collapses first on a phone; About and
+the two pills do not.
 
-**Logged-in mentors** see: Mentors, Dashboard, Log out, and an avatar monogram.
-The current page is marked with `aria-current="page"` and rendered in
+**Logged-in mentors** see: Mentors, Dashboard, About, Log out, and an avatar
+monogram. The current page is marked with `aria-current="page"` and rendered in
 `accent-700` at 7.90:1, with a weight change as well, so the current item is not
 signalled by colour alone.
+
+**Why About does not collapse.** There is no drawer or hamburger in this
+product, and there will not be one for a navigation this short: the header
+wraps to a second line instead, which keeps every destination operable without
+a disclosure to open first. About is the page that says where the price comes
+from, so of the four items it is the last one that should disappear on a phone.
+Browse mentors stays the one that collapses, because the two pills already lead
+a visitor into the product and the directory is one tap further on from either.
+
+### 12.10 About, bold hero then calm
+
+The page that answers whether the number elsewhere in the product can be
+believed. Route `/about`. It carries its own `title` and `description`, and it
+is a server component, because nothing on it has state.
+
+The hero is **bold**: the full-bleed `hero` gradient with its three glows, an
+overline, one `display` headline, a lead at `max-w-lead`, a white pill to
+register and an outlined pill that anchors to the How it works section. It uses
+`display` and not `display-xl`, which stays the landing page's alone.
+
+Everything below the hero is **calm**, on white, in seven sections in this
+order. Each opens with a `display` h2 and an optional lead at `body-lg` in
+`ink-700`.
+
+| Section | Form |
+|---|---|
+| The problem | Three soft-tinted cards: priced too high, priced too low, nothing to lean on |
+| How it works | `id="how-it-works"`, over the two `glow-field` glows. An ordered list of three tinted cards, each with a 44px white circle holding a stroked icon, an `overline` step number, an `h3` and one line of body |
+| Where the data came from | Prose only, at `max-w-prose`, four paragraphs |
+| How it was built | An ordered list of five points, each with an `accent-100` numbered disc at 10.21:1, then the one-line note for the curious in `small` `ink-500` |
+| How accurate is it | Two content cards side by side, one per model, each a `<dl>` of five rows: label, value with tabular numerals, and the scale that value is on. Then the verdict in `body-lg`, then a caution `Note` headed "What this does not claim." |
+| What it does not do | Three content cards |
+| Closing | The `closing` gradient band, as on the landing page, with a white pill and an outlined pill |
+
+**Rules this page is held to.**
+
+- **No invented social proof.** No testimonials, no user counts, no customer
+  logos, no team photos, no partner claims. Polish and plain writing carry it
+  instead. A page about trustworthiness that fabricates its own evidence has
+  argued against itself.
+- **Every figure is read from the training report**, not written from memory.
+  The five rows come from `reports/model_results.json`, from the winning model
+  for each feature set, and each one states the scale it is on: R-squared is a
+  share from 0 to 1, log RMSE is on the log price scale, MAE and RMSE are in
+  Australian dollars.
+- **No claim about demand responsiveness.** The evidence that prices move with
+  demand is still being measured, so the page says that and says nothing more.
+- The copy lives in `src/lib/copy.ts` beside `BRAND`, never inline in the page,
+  because almost every sentence on it is a claim and the claims are reviewed
+  together.
+- Two tinted-card grids and two content-card grids, all of which collapse to one
+  column at `mid`. Checked at 360px with no horizontal scroll.
+
+### 12.11 Footer
+
+One footer, on every page, in the **bold** register. It is the only bold object
+on a calm screen, and it is allowed there because it sits after the content
+rather than behind it.
+
+- **Background**: the `hero` gradient, the same recipe as the landing hero,
+  with its cyan, violet and magenta glows. The `on-gradient` class is on the
+  element, so a focused link inside it gets the inverted white focus ring.
+- **All text is white**, per section 2.4. Every stop of this gradient clears
+  4.5:1 for white, from 13.06:1 at `#1E1B8F` to 5.17:1 at `#2563EB`, so no line
+  has to be re-argued per window width. No tint is used anywhere in it.
+- **Layout**: two columns from `wide`, a brand block and a link block. The link
+  block is three columns from `mid` and two from `xs`. Everything is one column
+  below that.
+- **Brand block**: the logo mark at 40px with the wordmark at 2rem in the
+  display face, the one-line tagline under it at `max-w-lead`, and a white pill
+  reading Get your price.
+- **Link columns**: Product (Get your price, How it works, About), Mentors
+  (Browse mentors, For mentors dashboard), Account (Log in, Register). Each
+  column is its own `<nav>` with an `aria-label`, so a screen reader reaches
+  three named groups rather than one undifferentiated list. Column headings are
+  `overline`. Links are white, 44px tall on touch, and underline on hover; they
+  are navigation rather than inline prose, so the resting state carries no
+  underline and `link-700` is not used, which would fail on this background in
+  any case.
+- **Bottom bar**: a hairline at 30 percent white, then the copyright line and
+  "A final-year university project" at `small`. No personal names, anywhere.
+- The link list is data in `copy.ts`, not markup, so the footer and its tests
+  cannot drift apart about where a link goes.
 
 ## 13. Anti-patterns flagged for this product
 

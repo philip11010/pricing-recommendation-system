@@ -8,8 +8,9 @@
  * card, the range, the advisory sentence, the low confidence note when it
  * applies, and the three answers.
  *
- * Below the gradient, on white, the two comparisons. Each opens with a plain
- * language sentence and then the visual, never the other way round.
+ * Below the gradient, on white, the two comparisons, and under them the
+ * account of how the price was arrived at. Each opens with a plain language
+ * sentence and then the visual, never the other way round.
  */
 
 import { useParams, useRouter } from "next/navigation";
@@ -344,11 +345,13 @@ function PriceScreen({ mentor }: { mentor: Mentor }) {
 
       <Column wide className="py-12">
         <div className="grid gap-6">
-          {/* The account comes before the charts: a mentor asks what the
-              number is, then why it is that number, then what everybody
-              else charges. */}
-          <PriceExplanation recommendationId={recommendation.id} />
+          {/* The comparisons come before the account. A mentor reads the
+              number, then asks whether it is a normal number for somebody
+              like them, and only then asks how it was arrived at. The two
+              charts answer the first question, so they go first and the
+              account of the price follows them. */}
           <Comparisons recommendation={recommendation} />
+          <PriceExplanation recommendationId={recommendation.id} />
         </div>
       </Column>
     </>

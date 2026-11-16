@@ -441,8 +441,20 @@ export interface DashboardTotals {
   average_difference_percent: number | null;
 }
 
-/** The one line the mentor's own page opens with. */
+/**
+ * The one line the mentor's own page opens with.
+ *
+ * About one service: the one whose price the mentor most recently settled on,
+ * or the one they registered with if they have never settled on any. The
+ * service is named here so a mentor with more than one can read which of
+ * their prices this is, and so the comparison beside it is drawn for the same
+ * service rather than for whichever happens to be first in the list.
+ */
 export interface DashboardHeadline {
+  service_id: number | null;
+  service_label: string | null;
+  session_label: string | null;
+  max_mentees: number | null;
   your_price: number | null;
   similar_typical: number | null;
   position_vs_range: RangePosition | null;
@@ -456,6 +468,12 @@ export interface DashboardHeadline {
  * Null for a mentor the platform has not measured, which is every new one.
  * A share invented for them would be the only figure on the page nobody
  * observed, so the card goes rather than showing a zero.
+ *
+ * Nothing in this application draws it. The API sends it and this records
+ * the shape it sends, but the two booked shares and the sentence between
+ * them read as an argument for moving a price, and the evidence for that
+ * argument has not been measured. The dashboard shows the mentor's recent
+ * months instead and says only what they hold.
  */
 export interface DemandComparison {
   position: "above" | "below" | "similar";

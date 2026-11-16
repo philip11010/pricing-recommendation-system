@@ -80,12 +80,19 @@ export function formatPercent(
   return body;
 }
 
-/** A rating out of five, to one decimal place. */
+/**
+ * A rating out of five, to one decimal place, written "4.9/5".
+ *
+ * The compact form rather than "4.9 out of 5", because this figure appears
+ * on a statistic card and on a directory tile where the words were longer
+ * than the number they described. Written once here so the dashboard, the
+ * public profile and every mentor card say it the same way.
+ */
 export function formatRating(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "Not rated";
   }
-  return `${value.toFixed(1)} out of 5`;
+  return `${value.toFixed(1)}/5`;
 }
 
 const dateFormatter = new Intl.DateTimeFormat(LOCALE, {

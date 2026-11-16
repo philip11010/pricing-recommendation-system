@@ -8,9 +8,11 @@
  * from, and the live preview beside them is the same panel the registration
  * form uses.
  *
- * The mentor's existing skills are ticked to start with, since a second
- * service usually covers much of what the first one did, and every one of
- * them can be unticked.
+ * All three answers start from the mentor's most recent service, since a new
+ * service usually looks much like the last one they described, and every one
+ * of them can be changed. The most recent rather than the first: a mentor who
+ * has moved from one to one sessions to groups of six would otherwise be
+ * handed the one to one they set up when they joined, every time.
  */
 
 import { useRouter } from "next/navigation";
@@ -31,6 +33,8 @@ import { api } from "@/lib/api-client";
 import type { Mentor, OptionsResponse } from "@/lib/api-types";
 import { SKILL_GROUPS } from "@/lib/copy";
 import { ApiError, messageFor, toFieldErrors } from "@/lib/errors";
+import { mostRecentService, startingGroupSize } from "@/lib/prefill";
+import { refreshMentor } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 
 function AddServiceForm({
@@ -41,10 +45,12 @@ function AddServiceForm({
   options: OptionsResponse;
 }) {
   const router = useRouter();
-  const existing = mentor.services[0] ?? null;
+  const existing = mostRecentService(mentor.services);
 
   const [field, setField] = useState(existing?.field ?? "");
-  const [maxMentees, setMaxMentees] = useState(1);
+  const [maxMentees, setMaxMentees] = useState(() =>
+    startingGroupSize(existing, options.max_mentees),
+  );
   const [skills, setSkills] = useState<string[]>(existing?.skills ?? []);
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
@@ -80,6 +86,10 @@ function AddServiceForm({
         min_commitment: options.min_commitment_default,
         skills,
       });
+      // The held record of this mentor lists their services, and it has just
+      // become out of date. Asked for again rather than patched, so what the
+      // next screen reads is the API's answer and not this page's guess.
+      void refreshMentor();
       // Replace rather than push: the service exists now, and going back to
       // the form would offer to add the same one a second time.
       router.replace(`/recommendation/${created.recommendation.id}`);
@@ -125,6 +135,8 @@ function AddServiceForm({
             error={problems.field ?? null}
           />
 
+          {/* Prefilled from the mentor's most recent service, exactly as the
+              field and the skills above are, and changed the same way. */}
           <Stepper
             id="service-group-size"
             label="How many people per session?"

@@ -905,22 +905,168 @@ def test_the_headline_says_so_when_there_is_nothing_to_compare_with(
     assert block["sentence"]
 
 
-def test_the_headline_is_about_the_mentors_first_service(client, registered):
+def add_service(client, mentor_id, **overrides):
+    """A second service for a mentor who already has one."""
+    payload = {"field": "law", "max_mentees": 8, "min_commitment": 1, "skills": []}
+    response = client.post(
+        f"/mentors/{mentor_id}/services",
+        json={**payload, **overrides},
+        headers=headers(mentor_id),
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_a_service_added_without_a_price_does_not_take_over_the_headline(
+    client, registered
+):
     """
-    The main service: the one they described at registration, rather than
-    whichever they added last.
+    Adding a service is not settling on a price for it.
+
+    The headline follows the price the mentor most recently settled on, and a
+    service they have only just described has no settled price at all, so the
+    page keeps reporting the one they did settle.
     """
     mentor_id, service_id, _ = registered
     settle_at(client, mentor_id, service_id, 350)
-    client.post(
-        f"/mentors/{mentor_id}/services",
-        json={"field": "law", "max_mentees": 8, "min_commitment": 1, "skills": []},
-        headers=headers(mentor_id),
-    )
+    add_service(client, mentor_id)
 
     block = headline(client, mentor_id)
 
     assert block["your_price"] == 350
+    assert block["service_id"] == service_id
+
+
+def test_the_headline_follows_the_price_the_mentor_just_settled(client, registered):
+    """
+    The bug this rule exists for.
+
+    A mentor with a service priced long ago adds a second one and answers its
+    price. The page they land on afterwards is about the price they just
+    settled, not about the one they settled months before, because that is
+    the price they opened the page to read.
+    """
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, 350)
+    second = add_service(client, mentor_id)
+
+    answer = decide(
+        client,
+        mentor_id,
+        second["recommendation"]["id"],
+        action="accepted",
+    )
+    assert answer.status_code == 201, answer.text
+    settled = answer.json()["final_price"]
+
+    block = headline(client, mentor_id)
+
+    assert block["service_id"] == second["service"]["id"]
+    assert block["your_price"] == settled
+    assert block["your_price"] != 350
+
+
+def test_the_headline_follows_a_modified_price_too(client, registered):
+    """A price the mentor changed is still a price they settled on."""
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, 350)
+    second = add_service(client, mentor_id)
+
+    answer = decide(
+        client,
+        mentor_id,
+        second["recommendation"]["id"],
+        action="modified",
+        final_price=777,
+    )
+    assert answer.status_code == 201, answer.text
+
+    block = headline(client, mentor_id)
+
+    assert block["service_id"] == second["service"]["id"]
+    assert block["your_price"] == 777
+
+
+def test_a_rejection_that_names_no_price_settles_nothing(client, registered):
+    """
+    Declining without saying what you charge instead leaves the page alone.
+
+    Nothing was settled, so there is no new price for the headline to report
+    and it stays on the one that was.
+    """
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, 350)
+    second = add_service(client, mentor_id)
+
+    answer = decide(
+        client, mentor_id, second["recommendation"]["id"], action="rejected"
+    )
+    assert answer.status_code == 201, answer.text
+
+    block = headline(client, mentor_id)
+
+    assert block["service_id"] == service_id
+    assert block["your_price"] == 350
+
+
+def test_the_headline_names_the_service_it_is_about(client, registered):
+    """
+    A mentor with two services has two prices, and the page says which.
+
+    Without this a frontend showing one figure has to guess which service it
+    belongs to, and the one it would guess is the one that produced the bug.
+    """
+    mentor_id, service_id, _ = registered
+    settle_at(client, mentor_id, service_id, 350)
+
+    block = headline(client, mentor_id)
+
+    assert block["service_id"] == service_id
+    assert block["service_label"] == "Technology and software"
+    assert block["session_label"] == "One to one"
+    assert block["max_mentees"] == 1
+
+
+def test_the_headline_names_no_service_for_a_mentor_with_none(client, api_sessions):
+    """A mentor whose only service was deleted has nothing to name."""
+    body = register(client)
+    mentor_id = body["mentor"]["id"]
+    with api_sessions() as session:
+        session.delete(session.get(Service, body["service"]["id"]))
+        session.commit()
+
+    block = headline(client, mentor_id)
+
+    assert block["service_id"] is None
+    assert block["service_label"] is None
+    assert block["your_price"] is None
+
+
+def test_the_demand_card_follows_the_same_service_as_the_headline(
+    client, api_sessions, registered
+):
+    """
+    One service for the headline, the comparison and the demand card.
+
+    Three blocks describing three different services would be three answers
+    to the one question the page is asked.
+    """
+    from src.db.mentor_models import MentorHistory
+
+    from .conftest import SYNTHETIC_HISTORY
+
+    mentor_id, service_id, _ = registered
+    with api_sessions() as session:
+        session.add(MentorHistory(mentor_id=mentor_id, **SYNTHETIC_HISTORY))
+        session.commit()
+    settle_at(client, mentor_id, service_id, 350)
+    second = add_service(client, mentor_id, max_mentees=2)
+    decide(client, mentor_id, second["recommendation"]["id"], action="accepted")
+
+    payload = dashboard(client, mentor_id)
+
+    assert payload["headline"]["service_id"] == second["service"]["id"]
+    assert payload["demand"] is not None
 
 
 def test_the_dashboard_works_for_a_mentor_with_a_track_record(client, api_sessions):

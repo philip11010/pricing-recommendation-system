@@ -92,12 +92,17 @@ describe("formatPercent", () => {
 });
 
 describe("formatRating", () => {
-  it("writes a rating out of five", () => {
-    expect(formatRating(4.89)).toBe("4.9 out of 5");
+  it("writes a rating as a fraction of five", () => {
+    expect(formatRating(4.89)).toBe("4.9/5");
+  });
+
+  it("keeps the decimal place on a whole number", () => {
+    expect(formatRating(5)).toBe("5.0/5");
   });
 
   it("distinguishes unrated from zero", () => {
     expect(formatRating(null)).toBe("Not rated");
+    expect(formatRating(0)).toBe("0.0/5");
   });
 });
 

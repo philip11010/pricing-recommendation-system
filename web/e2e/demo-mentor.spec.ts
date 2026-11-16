@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-import { DEMO_EMAIL, DEMO_PASSWORD, logIn, requireApi } from "./helpers";
+import {
+  DEMO_EMAIL,
+  DEMO_PASSWORD,
+  hasHorizontalScroll,
+  logIn,
+  requireApi,
+} from "./helpers";
 
 /**
  * A mentor with a track record sees their months, as a chart and as a table.
@@ -52,23 +58,53 @@ test.describe("a mentor with a history", () => {
     await expect(compare.getByText("Where most mentors sit").first()).toBeVisible();
   });
 
-  test("sees how booked they are against similar mentors", async ({ page }) => {
+  test("sees their recent months as a chart, with the numbers behind it", async ({
+    page,
+  }) => {
     await logIn(page, DEMO_EMAIL, DEMO_PASSWORD);
     await expect(page).toHaveURL(/\/dashboard$/);
 
     const demand = page.getByRole("region", { name: "Demand for your time" });
     await expect(demand).toBeVisible();
+    await expect(
+      demand.getByText("How your activity has come in over the last months."),
+    ).toBeVisible();
 
-    // The answer is in the sentence, not in a colour or a bar.
-    await expect(demand.getByText(/Your time is booked/)).toBeVisible();
+    // The wrapper states what the chart shows in words; the chart library
+    // draws its own svg inside it, which is why this takes the first.
+    await expect(demand.getByRole("img").first()).toBeVisible();
 
     const table = demand.getByRole("group", {
-      name: "How booked you are, against similar mentors",
+      name: "Reviews recorded in each of the last months",
     });
     await expect(table).not.toBeVisible();
     await demand.getByText("View the numbers").click();
 
     await expect(table).toBeVisible();
-    await expect(table.getByRole("cell", { name: "You", exact: true })).toBeVisible();
+    await expect(table.getByRole("columnheader", { name: "Reviews" })).toBeVisible();
+
+    // Nothing on this card argues about a price in either direction.
+    const said = ((await demand.textContent()) ?? "").toLowerCase();
+    for (const banned of [
+      "higher price",
+      "lower price",
+      "raise your price",
+      "lower your price",
+      "booked",
+      "%",
+    ]) {
+      expect(said).not.toContain(banned);
+    }
+  });
+
+  test("reads at 360 pixels wide", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    await logIn(page, DEMO_EMAIL, DEMO_PASSWORD);
+    await expect(page).toHaveURL(/\/dashboard$/);
+
+    const demand = page.getByRole("region", { name: "Demand for your time" });
+    await expect(demand).toBeVisible();
+    await expect(demand.getByRole("img").first()).toBeVisible();
+    expect(await hasHorizontalScroll(page)).toBe(false);
   });
 });

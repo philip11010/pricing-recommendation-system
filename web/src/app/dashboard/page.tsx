@@ -4,12 +4,13 @@
  * The mentor's own page: calm, with a banner.
  *
  * What it shows is decided by what the platform actually measures. There is a
- * record of reviews month by month, so there is one bar chart of those. There
- * is no record of how busy a mentor has been or of what they charged in past
- * months, so there is no chart of either: a line through months the platform
- * cannot measure would be an invention.
+ * record of reviews month by month, so the two charts here are both drawn
+ * from it: the recent months on the demand card and the whole series below
+ * it. There is no record of how busy a mentor has been in a given month or
+ * of what they charged in one, so neither is drawn: a line through months the
+ * platform cannot measure would be an invention.
  *
- * Four statistics, a sentence with the ladder under it, one chart, and the
+ * Four statistics, a sentence with the ladder under it, two charts, and the
  * table of services with what the mentor decided about each price. A fifth
  * statistic appears only when the platform holds an overall rating for the
  * mentor: a mentor nobody has rated has not been rated badly, so there is no
@@ -17,6 +18,7 @@
  * never a series, for the same reason as the charts above.
  */
 
+import { DemandChart } from "@/components/demand-chart";
 import { ReviewsChart } from "@/components/reviews-chart";
 import { PriceLadder } from "@/components/price-ladder";
 import { RequireAuth } from "@/components/require-auth";
@@ -33,9 +35,8 @@ import {
   Statistic,
   TextLink,
 } from "@/components/ui";
-import { DataDisclosure } from "@/components/data-disclosure";
 import { api } from "@/lib/api-client";
-import type { Activity, Dashboard, Mentor } from "@/lib/api-types";
+import type { Activity, Dashboard, DashboardService, Mentor } from "@/lib/api-types";
 import {
   MINIMUM_CHART_POINTS,
   priceScale,
@@ -45,11 +46,37 @@ import {
 import { COMPARABLES_UNAVAILABLE_NOTE, decisionWord } from "@/lib/copy";
 import { messageFor } from "@/lib/errors";
 import { similarHref } from "@/lib/origin";
-import { formatMoney, formatPercent, formatRating } from "@/lib/format";
+import { formatMoney, formatRating } from "@/lib/format";
 import { useAsync } from "@/lib/use-async";
 
 function firstNameOf(name: string): string {
   return (name ?? "").trim().split(/\s+/)[0] ?? "";
+}
+
+/**
+ * The service the headline figure and the comparison are about.
+ *
+ * The API decides which one that is and names it, because the choice is a
+ * rule about what a mentor came to read rather than a detail of this page:
+ * the service they most recently settled a price on. Reading the first of
+ * the list here instead, as this page used to, is what left a mentor who had
+ * just answered a price for a new service looking at the price of their
+ * oldest one.
+ */
+function headlineService(dashboard: Dashboard): DashboardService | null {
+  const named = dashboard.headline.service_id;
+  return (
+    dashboard.services.find((service) => service.service_id === named) ??
+    dashboard.services[0] ??
+    null
+  );
+}
+
+/** How many people one session of this service takes, in words. */
+function sessionNote(service: DashboardService): string {
+  return service.max_mentees <= 1
+    ? "per one to one session"
+    : `per session of ${service.max_mentees}`;
 }
 
 /** How the reviews statistic reads under its own figure. */
@@ -78,8 +105,11 @@ function HeadlineStatistics({
   stats: ReviewStats;
 }) {
   const headline = dashboard.headline;
-  const main = dashboard.services[0] ?? null;
+  const main = headlineService(dashboard);
   const rated = dashboard.average_rating !== null;
+  // Named only when there is more than one, because a mentor with one
+  // service does not need telling which of their prices this is.
+  const several = dashboard.services.length > 1;
 
   return (
     <div
@@ -90,9 +120,9 @@ function HeadlineStatistics({
         value={headline.your_price ? formatMoney(headline.your_price) : "Not set yet"}
         note={
           main
-            ? main.max_mentees <= 1
-              ? "per one to one session"
-              : `per session of ${main.max_mentees}`
+            ? several
+              ? `${main.field_label}, ${sessionNote(main)}`
+              : sessionNote(main)
             : "add a service to set one"
         }
       />
@@ -136,7 +166,7 @@ function HeadlineStatistics({
 
 function HowYouCompare({ dashboard }: { dashboard: Dashboard }) {
   const headline = dashboard.headline;
-  const main = dashboard.services[0] ?? null;
+  const main = headlineService(dashboard);
   const comparables = main?.comparables ?? null;
 
   if (!dashboard.comparables_available) {
@@ -188,65 +218,40 @@ function HowYouCompare({ dashboard }: { dashboard: Dashboard }) {
 }
 
 /**
- * Demand for a mentor's time, beside comparable mentors.
+ * Demand for a mentor's time, as a chart of the recent months.
  *
- * The one card here that is not about money. Everything else on this page is
- * what somebody charges; this is how much of the time a mentor offered was
- * taken, against the same measure for the mentors they are compared with.
+ * What the platform measures month by month is reviews, so that is what this
+ * draws: how the mentor's recent months compare with each other. It is not a
+ * measure of price and it is not an argument about one.
  *
- * Nothing at all for a mentor the platform has not measured, which is every
- * new one. The API sends null for them rather than a zero, and the card is
- * absent rather than empty: a zero here would say their time went untaken.
+ * It used to read two booked-share percentages against each other and finish
+ * with a sentence suggesting which way the price could move. Both are gone.
+ * Nothing on this card says or implies that a busy month is a reason to
+ * charge more or a quiet one a reason to charge less: the chart shows the
+ * activity, and what to do about it is the mentor's to decide.
  *
- * The meaning is in the sentence and in the words beside each figure, never
- * in a colour. The two shares sit in a table behind a disclosure, like every
- * other figure on this page, so the sentence is read first and the numbers
- * are there for anybody who wants to check it.
+ * Nothing at all for a mentor with no months recorded, which is every new
+ * one. An empty chart would say their time went untaken rather than
+ * unrecorded, which is a different claim and not one the platform can make.
  */
-function DemandSection({ dashboard }: { dashboard: Dashboard }) {
-  const demand = dashboard.demand;
-  if (!demand) {
+function DemandSection({ activity }: { activity: Activity | null }) {
+  if (!activity || !activity.has_history || activity.months.length === 0) {
     return null;
   }
-
-  const standing = {
-    above: "More than most similar mentors",
-    below: "Less than most similar mentors",
-    similar: "About the same as most similar mentors",
-  }[demand.position];
 
   return (
     <Card role="region" aria-label="Demand for your time">
       <h2 className="text-h3 font-semibold">Demand for your time</h2>
-      <p className="mt-2 max-w-prose text-ink-700">{demand.sentence}</p>
-
-      <p className="mt-4 font-semibold text-ink-900">{standing}</p>
-      <p className="mt-1 text-small text-ink-500">
-        <span className="tabular">{formatPercent(demand.booked_percent)}</span> of your
-        offered time is booked, against{" "}
-        <span className="tabular">{formatPercent(demand.typical_booked_percent)}</span>{" "}
-        for a typical similar mentor.
+      <p className="mt-2 max-w-prose text-ink-700">
+        How your activity has come in over the last months.
       </p>
-
-      <DataDisclosure
-        caption="How booked you are, against similar mentors"
-        summaryLabel="View the numbers"
-        columns={["Who", "Share of offered time booked"]}
-        rows={[
-          [
-            "You",
-            <span key="mine" className="tabular">
-              {formatPercent(demand.booked_percent)}
-            </span>,
-          ],
-          [
-            `A typical similar mentor (${demand.compared_with} compared)`,
-            <span key="theirs" className="tabular">
-              {formatPercent(demand.typical_booked_percent)}
-            </span>,
-          ],
-        ]}
-      />
+      <div className="mt-2">
+        <DemandChart
+          months={activity.months}
+          reviews={activity.reviews_by_month}
+          caption="Reviews recorded in each of the last months"
+        />
+      </div>
     </Card>
   );
 }
@@ -495,7 +500,7 @@ function DashboardScreen({ mentor }: { mentor: Mentor }) {
                   stats={stats}
                 />
                 <HowYouCompare dashboard={dashboard.data} />
-                <DemandSection dashboard={dashboard.data} />
+                <DemandSection activity={activity.data} />
                 <ReviewsSection activity={activity.data} />
               </>
             )}
