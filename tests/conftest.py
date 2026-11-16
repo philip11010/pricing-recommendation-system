@@ -400,6 +400,11 @@ def _api_client(app, factory: sessionmaker[Session]) -> TestClient:
             yield session
 
     app.dependency_overrides[get_session] = session_override
+    # The request log is written after the response, outside the dependency
+    # that these tests override, so the writer is pointed at the same
+    # database here. Without this it would reach for the process-wide engine
+    # and write rows into whatever app.db the machine running the tests has.
+    app.state.log_sessions = factory
     return TestClient(app)
 
 

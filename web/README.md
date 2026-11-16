@@ -32,6 +32,24 @@ python scripts/build_demo_activity.py   # 5. their months of reviews
 uvicorn src.mentor.app:app --reload --port 8000
 ```
 
+Two more, for the `/admin` pages only. Neither is needed for anything a mentor
+sees:
+
+```bash
+# 6. the one account that may read /admin. No default address or password:
+#    with ADMIN_PASSWORD unset, a strong one is generated and printed once.
+ADMIN_EMAIL=admin@example.com python scripts/seed_admin.py
+
+# 7. real traffic, so the dashboard has something in it. This calls the
+#    running API and writes nothing itself.
+python scripts/replay_demo_traffic.py --count 120
+```
+
+Step 7 needs the API from the line above it already running, and it paces
+itself under the preview endpoint's limit of 60 calls a minute, so 120 calls
+take about two and a half minutes. Both are documented in full in the root
+`README.md`.
+
 Steps 1 and 2 are build outputs of a local training run and are git-ignored;
 see the root `README.md` for what they need. Steps 4 and 5 are what make the
 "mentor with a history" half of the interface work: on a fresh database every
@@ -58,11 +76,20 @@ own.
 | `NEXT_PUBLIC_API_URL`      | `http://127.0.0.1:8000`     | Where the browser reaches the pricing API                  |
 | `PLAYWRIGHT_DEMO_EMAIL`    | `<a seeded mentor address>` | The seeded account the history end to end test signs in as |
 | `PLAYWRIGHT_DEMO_PASSWORD` | `<that account's password>` | Its password, never written into a test file               |
+| `ADMIN_EMAIL`              | `<the admin address>`       | The administrator the `/admin` end to end test signs in as |
+| `ADMIN_PASSWORD`           | `<that account's password>` | Its password, never written into a test file               |
 
 `NEXT_PUBLIC_API_URL` defaults to `http://127.0.0.1:8000`, so a local run needs
-nothing set. The two Playwright variables have no default: the test that needs
-them skips itself with a line saying so when they are not set. The seeding
-script prints the addresses it wrote and the password it used.
+nothing set. The four test variables have no default: the tests that need them
+skip themselves with a line saying so when they are not set. The seeding script
+prints the addresses it wrote and the password it used, and
+`scripts/seed_admin.py` prints the administrator's address and, when it
+generated one, its password.
+
+`ADMIN_EMAIL` and `ADMIN_PASSWORD` are the same two variables
+`scripts/seed_admin.py` reads, which is deliberate: the account the test signs
+in as is the account that script created, and there is one place either of them
+is written down.
 
 The API has to allow this origin. It reads `ALLOWED_ORIGINS` as a
 comma-separated list and defaults to `http://localhost:3000` and
@@ -124,6 +151,7 @@ What they cover:
 | `skills-and-services.spec.ts` | Every skill the running API publishes being on the form, and adding a second service             |
 | `narrow-screen.spec.ts`       | The landing, register and price screens at 390 pixels, with no sideways scroll and 44px buttons  |
 | `keyboard-login.spec.ts`      | Logging in with the keyboard alone, and how a refusal is announced                               |
+| `admin.spec.ts`               | An administrator reaching all five `/admin` sections, and a mentor and a visitor being turned away |
 
 They write to the API's database: mentors registered by a test stay there. So
 run them against a database kept for that, rather than the one you develop
@@ -145,6 +173,13 @@ the demonstration mentors with `python scripts/seed_demo_mentors.py --reset`.
 Run against an already running web server with
 `E2E_WEB_URL=http://127.0.0.1:3000 npm run e2e`.
 
+`admin.spec.ts` is in two halves. The administrator half needs `ADMIN_EMAIL`
+and `ADMIN_PASSWORD` and skips itself without them. The mentor and visitor
+halves need neither and always run, which matters: what they check is that a
+signed-in mentor following a link to `/admin` lands on their own dashboard
+rather than on the log in screen, and that the link appears nowhere a visitor
+can see.
+
 ## Routes
 
 Each screen is in one of two visual registers, which `DESIGN.md` defines: bold
@@ -161,6 +196,7 @@ is the full bleed gradient, calm is white with a slim gradient banner.
 | `/mentors/[id]`          | Calm                 | One mentor's public profile                                       |
 | `/dashboard`             | Calm                 | The mentor's own page: statistics, comparison, reviews, decisions |
 | `/dashboard/add-service` | Calm                 | Another service, with the same preview as registration            |
+| `/admin`                 | Calm                 | The operations dashboard. Administrators only, and read only      |
 
 ## How it is put together
 
@@ -180,13 +216,19 @@ src/
 │   ├── data-disclosure.tsx The same figures as the chart, as a real table
 │   ├── price-preview.tsx  The live price beside the two forms
 │   ├── decision-panel.tsx Accept, change, decline
-│   └── require-auth.tsx   A page only a signed in mentor may read
+│   ├── require-auth.tsx   A page only a signed in mentor may read
+│   ├── require-admin.tsx  A page only an administrator may read
+│   └── admin/
+│       ├── chrome.tsx     The sidebar, the statistic cards and the grids
+│       ├── charts.tsx     The five chart shapes the sections are built from
+│       └── sections.tsx   Overview, model usage, outputs, users, models
 └── lib/
     ├── api-client.ts      The only place this application calls the API
     ├── api-types.ts       The shapes the API sends and accepts
     ├── token.ts           The access token, and being signed out by the server
     ├── session.ts         Who is signed in, as a page asks it
     ├── charts.ts          The arithmetic behind the three charts
+    ├── admin.ts           The sentences and arithmetic behind the admin charts
     ├── errors.ts          The API's refusal, turned into messages
     ├── format.ts          Money, percentages, dates
     ├── session-label.ts   What a session is called, from the API's rule

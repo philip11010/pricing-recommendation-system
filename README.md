@@ -240,6 +240,87 @@ It needs both the prepared models and the processed dataset, and fails with
 the name of whichever is missing. The activity build also needs the raw
 reviews and availability files. All of them are git-ignored.
 
+### 6. Create the administrator account (optional)
+
+The operations dashboard under `/admin` reports on the service rather than on
+any mentor, and it is open to administrator accounts only. Administration is a
+flag on an ordinary account, so one script sets it:
+
+```bash
+# a generated password, printed once
+ADMIN_EMAIL=admin@example.com python scripts/seed_admin.py
+
+# a password you choose
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=... python scripts/seed_admin.py
+
+# promote an account that already exists, without resetting its password
+ADMIN_EMAIL=admin@example.com python scripts/seed_admin.py --keep-password
+
+# take the flag away again, leaving the account alone
+ADMIN_EMAIL=admin@example.com python scripts/seed_admin.py --revoke
+```
+
+On PowerShell, set the variables first:
+
+```powershell
+$env:ADMIN_EMAIL = "admin@example.com"
+python scripts/seed_admin.py
+```
+
+**There is no default address and no default password.** `ADMIN_EMAIL` is
+required and the script stops without it. With `ADMIN_PASSWORD` unset, a strong
+password is generated and printed once at the end of the run, which is the only
+time anybody will see it: only the Argon2 hash is stored, so a lost password
+means running the script again rather than recovering the old one. A password
+written into a script or documented as a default would be a credential in the
+repository, in every clone of it and in its history.
+
+Run it against a database that already has the schema, so after
+`alembic upgrade head`. It creates the account if the address is new, and sets
+the flag on it if the address already belongs to a mentor.
+
+There is no endpoint that grants the flag. Granting administration over the API
+would make the gate on `/admin` something the API could be talked into opening.
+
+### 7. Generate demonstration traffic (optional)
+
+An empty operations dashboard looks broken, and fabricated analytics would be
+dishonest. This script calls the running API instead, so every row behind the
+dashboard is a model call the service really made, with a duration it really
+took and a status it really answered with:
+
+```bash
+python scripts/replay_demo_traffic.py                 # 60 calls, 50 a minute
+python scripts/replay_demo_traffic.py --count 200
+python scripts/replay_demo_traffic.py --previews-only
+python scripts/replay_demo_traffic.py --rate 30 --api http://127.0.0.1:8000
+```
+
+It sends two kinds of call. **Previews**, with a field, a group size and a set
+of skills drawn at random from the options the API itself publishes, which is
+the live figure on the registration form and needs no account. And
+**recalculations** for the seeded demonstration mentors, which it signs in as:
+those are the calls that use the full model, because a preview has no account
+behind it and can only ever use the core one.
+
+**It writes nothing to the database.** There is one database read in it, to find
+out which addresses the demonstration mentors sign in with, and no writes at
+all: every logged row is written by the API itself, through the same code that
+logs a mentor's own request. A test asserts that the script contains no insert.
+
+Pacing is under the preview endpoint's limit of 60 calls a minute from one
+address. The default is 50 a minute, and a `--rate` over 60 is refused, because
+a faster run would collect refusals rather than prices. The run is seeded, so
+the same command sends the same traffic twice.
+
+It prints a summary of what came back: calls by path, by status and by model,
+how many were answered, and the median and slowest response. Those durations
+are measured from the script's own side of the connection, so they include the
+network and read a little longer than the dashboard's figures.
+
+With no demonstration mentors seeded, or with the wrong `DEMO_PASSWORD`, it
+says so and sends previews only.
+
 ## Authentication and demo accounts
 
 A mentor registers with an email address and a password and is given a signed
@@ -276,6 +357,10 @@ Configuration, all read from the environment or `.env`:
   defaulting to `Pathwise-demo-1`. The seed prints the addresses and the
   password at the end of a run: they are fictional accounts on `example.com`,
   which can never belong to anyone, created to be signed in to.
+- `ADMIN_EMAIL` and `ADMIN_PASSWORD` are read by `scripts/seed_admin.py` and
+  by nothing else. Neither has a default. The first is required; with the
+  second unset, a strong password is generated and printed once. See step 6
+  above.
 
 **New accounts are not verified.** Verification is what the platform says about
 a mentor after a person has checked who they are, so nothing a mentor sends can
@@ -315,10 +400,59 @@ mentor answered those.
 | GET    | `/services/{service_id}/history`         | yes   | Every price this service has had, and its answer   |
 | GET    | `/recommendations/{id}`                  | yes   | Read back one advisory price, and its answer       |
 | POST   | `/recommendations/{id}/decision`         | yes   | Answer one advisory price                           |
+| GET    | `/admin/summary`                         | admin | What is on the platform, and how busy it has been  |
+| GET    | `/admin/usage`                           | admin | Calls per day and per path, and how long they took |
+| GET    | `/admin/outputs`                         | admin | The distribution of advised prices and the answers |
+| GET    | `/admin/signups`                         | admin | New accounts per week, verified against not        |
+| GET    | `/admin/models`                          | admin | The held-out scores of the two deployed models      |
+| GET    | `/admin/recent`                          | admin | The latest logged calls, with no account named     |
 
 Every endpoint marked "yes" is scoped to the mentor the token belongs to. A
 request for somebody else's record returns 404 rather than 403, because 403
 would confirm that the other record exists.
+
+The six marked "admin" are the operations dashboard, and they are the one place
+in this API that answers 403. They are read only, they report on the service
+rather than on any mentor, and they return no name, no address and no mentor
+id. A caller with no usable token gets 401; a signed-in account without the
+administrator flag gets 403, because `/admin` is a fixed set of paths with
+nothing per-account about it, so there is nothing for a 404 to conceal and
+"you are signed in and not allowed here" is the accurate answer.
+
+`/admin/models` reads the held-out scores from `reports/model_results.json` and
+returns a whitelist of five named figures per model, each labelled with the
+scale it is measured on, and never the document it read them from: the training
+report also holds the internal column names the models were fitted on, and
+those appear nowhere this application serves. The report is a git-ignored
+output of a local training run, so on a machine without one the endpoint
+answers with the two model cards, the deployed file names and
+`report_available: false`, which is the honest statement that the scores were
+not measured there.
+
+### What is logged
+
+Every call to a path that scores a model writes one row to `request_logs`: the
+registration preview, the price given at registration, the price for a service
+a mentor just added, and a price recalculated from the dashboard. A row holds a
+field id, the group size, the skill count, which model answered, the price and
+range it gave, how many milliseconds the request took and what status it
+answered with.
+
+A row holds **no name, no email address, no free text, no network address and
+no user agent**, and the only identifier on it is the mentor id on a call that
+arrived with a token, which `/admin/recent` does not return. The preview is
+rate limited per address, so the application does see one; the event an
+endpoint can log has no field for it.
+
+The row is written in a background task, which runs after the response has been
+sent and in a worker thread, so a mentor has their price before the row exists.
+A write that fails costs one warning line in the application log and nothing
+else: a mentor who cannot get a price because an analytics table is full would
+be a far worse fault than a gap in a chart.
+
+Price decisions are not duplicated into that table. The `decisions` table
+already records what a mentor did with each price, once per recommendation, and
+`/admin/summary` and `/admin/outputs` read it.
 
 ### What anybody may read
 
@@ -615,7 +749,10 @@ src/
 │   ├── schemas.py   Request and response shapes
 │   ├── security.py  Password hashing and the signed access tokens
 │   ├── rate_limit.py  How often one caller may ask for a preview price
-│   ├── dependencies.py  The one function that decides whose data a request sees
+│   ├── request_log.py Recording what was asked of the models, after the reply
+│   ├── admin.py     The six read-only endpoints of the operations dashboard
+│   ├── admin_schemas.py  The shapes those six return
+│   ├── dependencies.py  Who a request is, and whether they may read /admin
 │   └── app.py       The FastAPI application
 ├── api/             Earlier dashboard prototype
 ├── db/              SQLAlchemy models

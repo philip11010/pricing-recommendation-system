@@ -39,6 +39,7 @@ const MENTOR: Mentor = {
   years_mentoring_band: null,
   verified: true,
   is_demo: false,
+  is_admin: false,
   services: [],
   history: null,
   created_at: "2025-01-01T00:00:00Z",

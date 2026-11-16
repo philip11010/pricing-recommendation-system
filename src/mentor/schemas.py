@@ -439,6 +439,16 @@ class MentorOut(BaseModel):
             "rather than by someone registering."
         ),
     )
+    is_admin: bool = Field(
+        default=False,
+        description=(
+            "True for an account that may read the administration pages "
+            "under /admin. Set by scripts/seed_admin.py: nothing a mentor "
+            "sends can set it. The frontend reads it to decide whether to "
+            "show the Admin link at all, and the flag is checked again on "
+            "the server for every /admin request."
+        ),
+    )
     services: list[ServiceOut] = Field(default_factory=list)
     history: HistorySummaryOut | None = Field(
         default=None,

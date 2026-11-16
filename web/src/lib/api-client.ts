@@ -12,6 +12,12 @@ import { ApiError, NETWORK_MESSAGE, NetworkError, UNEXPECTED_MESSAGE } from "./e
 import { handleUnauthorized, readToken } from "./token";
 import type {
   Activity,
+  AdminModels,
+  AdminOutputs,
+  AdminRecent,
+  AdminSignups,
+  AdminSummary,
+  AdminUsage,
   ApiErrorBody,
   ComparablesOrder,
   ComparablesResponse,
@@ -303,5 +309,44 @@ export const api = {
       auth: true,
       signal,
     });
+  },
+
+  /* --------------------------------------------------------------- admin */
+
+  /**
+   * The six read-only endpoints behind /admin.
+   *
+   * Grouped under one key because they share an audience and a refusal: the
+   * API answers 403 to a signed-in account that is not an administrator, so
+   * a page built on these has one error to handle rather than six.
+   *
+   * Every one of them needs the token, and none of them sends a body: the
+   * administration surface is read only, and nothing on it can change a
+   * mentor's price or verify an account.
+   */
+  admin: {
+    summary(signal?: AbortSignal) {
+      return request<AdminSummary>("/admin/summary", { auth: true, signal });
+    },
+
+    usage(signal?: AbortSignal) {
+      return request<AdminUsage>("/admin/usage", { auth: true, signal });
+    },
+
+    outputs(signal?: AbortSignal) {
+      return request<AdminOutputs>("/admin/outputs", { auth: true, signal });
+    },
+
+    signups(signal?: AbortSignal) {
+      return request<AdminSignups>("/admin/signups", { auth: true, signal });
+    },
+
+    models(signal?: AbortSignal) {
+      return request<AdminModels>("/admin/models", { auth: true, signal });
+    },
+
+    recent(signal?: AbortSignal) {
+      return request<AdminRecent>("/admin/recent", { auth: true, signal });
+    },
   },
 };

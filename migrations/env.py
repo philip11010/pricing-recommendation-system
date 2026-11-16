@@ -21,7 +21,14 @@ from src.db import Base, create_db_engine, database_url
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers stays off. It defaults to on, which switches
+    # off every logger that is not named in alembic.ini, and that is a
+    # surprise worth avoiding twice over: a migration run from inside a
+    # process that has already configured its own logging would silence the
+    # application, and the test suite runs the migrations in the same process
+    # as the API, which left the API's own warnings unrecorded for the rest of
+    # the run.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

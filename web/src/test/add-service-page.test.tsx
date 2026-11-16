@@ -54,6 +54,7 @@ const MENTOR: Mentor = {
   years_mentoring_band: null,
   verified: true,
   is_demo: false,
+  is_admin: false,
   // Oldest first, as the API sends them.
   services: [service(1, 1, "technology_software"), service(2, 6, "law")],
   history: null,

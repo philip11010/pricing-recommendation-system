@@ -11,6 +11,13 @@
  * A visitor and a signed in mentor see different navigation, and the current
  * page is marked with aria-current as well as with colour and weight, so the
  * mark is not carried by colour alone.
+ *
+ * There is one item not everybody who is signed in can see. The Admin link is
+ * rendered only for an account carrying the administrator flag, so a mentor
+ * is never shown a destination that would turn them away. It is not the
+ * permission: the API checks the same flag on the account for every request
+ * those pages make, and a browser that drew the link anyway would get 403 and
+ * nothing else.
  */
 
 import Link from "next/link";
@@ -85,6 +92,7 @@ export function SiteHeader() {
               {navLink("/mentors", "Mentors")}
               {navLink("/dashboard", "Dashboard")}
               {navLink("/about", "About")}
+              {mentor.is_admin ? navLink("/admin", "Admin") : null}
               {/* The outlined pill has a hover state built for the surface it
                   is on. A quiet pill recoloured for the gradient would keep
                   the light hover fill underneath its white label. */}

@@ -39,6 +39,7 @@ MENTOR_TABLES = {
     "mentor_history",
     "recommendations",
     "decisions",
+    "request_logs",
 }
 
 

@@ -631,8 +631,10 @@ Mobile first. Breakpoints 375, 560, 640, 768, 900, 1024, 1440, tested at each.
 
 ## 12. Screens
 
-Eight screens, each assigned to one register. The mockup routes them by hash in
-the order below. About, in 12.10, was added after the mockup and is not in it.
+Nine screens, each assigned to one register. The mockup routes them by hash in
+the order below. Two were added after the mockup and are not in it: About, in
+12.10, and Admin, in 12.12. Admin is also the one screen the mockup would never
+hold, because it is not part of what a mentor sees.
 
 ### 12.1 Landing, bold
 
@@ -795,6 +797,18 @@ monogram. The current page is marked with `aria-current="page"` and rendered in
 `accent-700` at 7.90:1, with a weight change as well, so the current item is not
 signalled by colour alone.
 
+**Administrators** see one more item, Admin, between About and Log out. It is
+the only item in the product that is not shown to everybody who can see the
+header, and the rule is narrow: it is rendered when the signed-in account
+carries the administrator flag, and it appears nowhere in the visitor
+navigation, nowhere in the footer and on no public page. A mentor is never
+shown a destination that would turn them away.
+
+**The link is not the permission.** It is drawn from a flag the API sent, and
+the API checks the same flag on the account for every request those pages
+make. A browser that drew the link anyway would reach the page and be refused
+by all six endpoints, which the page reports as the refusal it is. See 12.12.
+
 **Why About does not collapse.** There is no drawer or hamburger in this
 product, and there will not be one for a navigation this short: the header
 wraps to a second line instead, which keeps every destination operable without
@@ -878,6 +892,107 @@ rather than behind it.
 - The link list is data in `copy.ts`, not markup, so the footer and its tests
   cannot drift apart about where a link goes.
 
+### 12.12 Admin, calm with a banner
+
+The operations dashboard. Route `/admin`, administrators only, and the one
+screen in the product whose subject is the service rather than a mentor. It
+reports what the service has been asked to do, what the models advised, who has
+registered and how the two models scored. It is **read only**: nothing on it
+can change a price, verify an account or retrain anything.
+
+**Who reaches it.** Three answers, because two would put a mentor in a loop.
+Somebody whose token is still being checked waits. Somebody with no account
+goes to `/login`. A signed-in mentor goes to `/dashboard`, which is the page
+they were looking for, rather than to `/login`, which they have already been
+through. There is no link to it anywhere public: see 12.9.
+
+**Layout.** A gradient banner carrying the title and a one-line statement of
+what the page is, then a left sidebar and a main area.
+
+- **Sidebar**: Overview, Model usage, Outputs, Users, Models. It is navigation
+  and not a tablist: the items are a `nav` of buttons with
+  `aria-current="page"` on the chosen one, marked by an `accent-100` fill and a
+  weight change as well as by colour. A tablist would promise arrow-key
+  behaviour the page does not implement. The chosen section is held in the
+  query string, so a view can be linked and the back button works.
+- **Main area**: a row of summary cards at the top, then a grid of chart cards.
+  The cards are two columns on a phone, three from `wide` and six from `xl`.
+  The chart grid is one column up to `xl` and two above it, so a chart is never
+  narrower than about 420px.
+- **At 900px and below** the sidebar becomes a row of the same buttons above
+  the content, scrolling inside its own container rather than widening the
+  page. There is no drawer, for the same reason as the main navigation.
+
+**Why a sidebar at all**, on a product where every other screen is one column.
+These five sections are five questions about one service, read in no particular
+order and returned to. Every mentor-facing screen answers a single question,
+which is why none of them has one.
+
+**Sections.**
+
+1. **Overview**: six statistic cards, which are accounts, mentors,
+   recommendations, the share accepted as advised, calls in the last 24 hours
+   and the median response time. Below them, pricing calls per day as stacked
+   bars split by model. Below that, the recent activity table.
+2. **Model usage**: calls by path as a horizontal bar chart, median and 95th
+   percentile response time per day as two lines, the core against full share
+   as one divided bar, and the daily chart again.
+3. **Outputs**: the distribution of advised prices as a histogram,
+   recommendations by field as horizontal bars, decisions by type as one
+   divided bar, and the width of the advised range as a histogram.
+4. **Users**: three cards, then new accounts per week as stacked bars split by
+   whether the account has been verified.
+5. **Models**: two cards, one per deployed model, each with five held-out
+   scores, **each labelled with the scale it is measured on**, a note on what
+   that model is given (core: eight profile inputs; full: core plus
+   track-record inputs), the deployed file name and the date it was fitted.
+
+**The series scale.** Section 8.2 gives the product one accent and one cool
+band, and this screen is the first place a chart needs more than one series. It
+uses three steps and no more, in this order:
+
+| Step | Token | Measured |
+|---|---|---|
+| First series | `accent-700` `#4338CA` | 7.90:1 on white |
+| Second series | `chart-band` `#BAE6FD` with a 2px `chart-band-edge` `#0369A1` rule | 1.33:1 on white, so never without its edge; 5.95:1 against the first step |
+| Third series | `ink-500` `#55555F` | 7.37:1 on white, 5.55:1 against the second step |
+
+Adjacent steps of a stack therefore clear the 3:1 a non-text indicator needs
+and survive in greyscale. The pale middle step never appears without its edge
+rule, which is the same belt-and-braces the price ladder uses in 8.2, for the
+same reason. No status colour is used in any chart here: accepted, changed and
+declined are three segments of one divided bar in a fixed order, not three
+greens and reds.
+
+**Nothing is carried by colour alone.** Every stacked or divided bar carries a
+swatch legend naming each step and printing its count, and the order of the
+legend is the order of the stack. The two response-time lines are told apart by
+dash pattern as well, and their legend swatch reproduces the stroke it stands
+for, dashes included. Every chart is followed by the data table.
+
+**Every chart has the four parts from section 8**, without exception: an `h3`
+heading, the plain-language sentence above it that states the answer in words
+and is also the `aria-label` of the `role="img"` wrapper, the chart, and the
+data disclosure. Each chart card is a `section` with an `aria-label`, so the
+page is navigable chart by chart.
+
+**Empty states are first class here.** A fresh deployment has no traffic, and a
+chart of zeros reads as a measurement where "No activity yet" reads as the
+truth. Every chart on this screen has one, and no chart draws an axis with no
+marks on it.
+
+**Null is never drawn as zero.** A day with no calls has no median response
+time, and a platform whose advice nobody has answered has no acceptance rate.
+Both are stated in words. "0% accepted" would read as advice that everybody
+rejected, which is a different claim from nobody having answered.
+
+**What this screen never says.** No claim that the price responds to demand,
+anywhere, in any section. The page reports what the service did and what the
+models scored, and neither is a statement about what moves a price. It also
+carries no name, no email address and no mentor id: the endpoints behind it
+return counts, and the activity table is the request log without its one
+identifier, so there is nothing personal for this screen to render.
+
 ## 13. Anti-patterns flagged for this product
 
 These are the anti-patterns the design research flags for a professional,
@@ -930,6 +1045,16 @@ here, with what we do about each.
 19. **Fixed pixel container widths, and disabling zoom.**
 20. **A chart built from fewer than four points.** Use a statistic card.
 21. **Raw hex in components** instead of the tokens in section 2.
+22. **A chart of zeros on a dashboard nobody has used yet.** A chart drawn from
+    an empty series reads as a measurement of nothing rather than as the
+    absence of a measurement, and a line through only the days that had traffic
+    draws straight across an outage. Every series on `/admin` is filled to the
+    whole window, and a window with nothing in it gets an empty state. See
+    12.12.
+23. **A score printed without its scale.** An operations page is read by
+    somebody who did not run the training, and "0.54" is not a score until it
+    is named as R squared on a 0 to 1 scale where higher is better. Every
+    metric on 12.12 carries its unit and its direction.
 
 ## 14. Deferred build work
 

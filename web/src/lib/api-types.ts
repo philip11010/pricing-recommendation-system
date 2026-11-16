@@ -98,6 +98,15 @@ export interface Mentor {
   years_mentoring_band: string | null;
   verified: boolean;
   is_demo: boolean;
+  /**
+   * Whether this account may read the administration pages.
+   *
+   * Read only to decide whether to render the Admin link and let the /admin
+   * route draw. It is not a permission: the API checks the same flag on the
+   * account for every /admin request, so a browser that set this to true
+   * would get 403s and nothing else.
+   */
+  is_admin: boolean;
   services: Service[];
   history: HistorySummary | null;
   created_at: string;
@@ -519,6 +528,176 @@ export interface Activity {
   price_by_month: (number | null)[];
   currency: string;
   note: string;
+}
+
+/* ------------------------------------------------------------------ admin */
+
+/**
+ * The shapes the six /admin endpoints send.
+ *
+ * None of them carries a name, an address or a mentor id: the aggregates are
+ * counts and the activity list is the request log without its one identifier.
+ * That is a property of the API rather than of this file, and it is why the
+ * administration pages need no special handling of personal data.
+ *
+ * Every figure that is not a count can be null, and null means "not measured"
+ * rather than zero. A platform with no decisions has no acceptance rate, and
+ * a day with no calls has no median response time; drawing either as a zero
+ * would be a claim nobody made.
+ */
+
+export interface LabelledCount {
+  id: string;
+  label: string;
+  count: number;
+}
+
+/** One bar of a histogram. `low` is included and `high` is not. */
+export interface HistogramBucket {
+  low: number;
+  high: number;
+  count: number;
+}
+
+export interface AdminDecisionCounts {
+  accepted: number;
+  modified: number;
+  rejected: number;
+  total: number;
+  acceptance_rate_percent: number | null;
+  pending: number;
+}
+
+export interface AdminSummary {
+  accounts: number;
+  mentors: number;
+  verified_mentors: number;
+  demo_mentors: number;
+  services: number;
+  recommendations: number;
+  decisions: AdminDecisionCounts;
+  requests_last_24h: number;
+  median_response_ms: number | null;
+  logged_requests: number;
+}
+
+export interface AdminUsageDay {
+  day: string;
+  core: number;
+  full: number;
+  /** Calls answered before a model was reached: a refusal, or a 404. */
+  no_model: number;
+  total: number;
+}
+
+export interface AdminLatencyDay {
+  day: string;
+  median_ms: number;
+  p95_ms: number;
+  requests: number;
+}
+
+export interface AdminModelShare {
+  core: number;
+  full: number;
+  no_model: number;
+  total: number;
+  core_percent: number | null;
+  full_percent: number | null;
+}
+
+export interface AdminUsage {
+  days: number;
+  per_day: AdminUsageDay[];
+  by_endpoint: LabelledCount[];
+  latency_per_day: AdminLatencyDay[];
+  model_share: AdminModelShare;
+}
+
+export interface AdminFieldOutputs {
+  id: string;
+  label: string;
+  count: number;
+  median_price: number | null;
+}
+
+export interface AdminRangeWidths {
+  median: number | null;
+  median_percent_of_price: number | null;
+  buckets: HistogramBucket[];
+}
+
+export interface AdminOutputs {
+  recommendations: number;
+  currency: string;
+  price_buckets: HistogramBucket[];
+  median_price: number | null;
+  by_field: AdminFieldOutputs[];
+  decisions: AdminDecisionCounts;
+  range_widths: AdminRangeWidths;
+}
+
+export interface AdminSignupWeek {
+  /** The Monday the week starts on. */
+  week: string;
+  accounts: number;
+  verified: number;
+  unverified: number;
+}
+
+export interface AdminSignups {
+  weeks: number;
+  per_week: AdminSignupWeek[];
+  accounts: number;
+  verified: number;
+  unverified: number;
+}
+
+/** One held-out score, with the scale it is measured on. */
+export interface AdminModelMetric {
+  id: string;
+  label: string;
+  value: number;
+  scale: string;
+}
+
+export interface AdminModelCard {
+  id: string;
+  label: string;
+  algorithm: string | null;
+  inputs_note: string;
+  file: string | null;
+  created_at: string | null;
+  metrics: AdminModelMetric[];
+}
+
+export interface AdminModels {
+  measured_on: string;
+  cross_validation: string;
+  currency: string;
+  /** False on a machine with no training report, which is a normal state. */
+  report_available: boolean;
+  models: AdminModelCard[];
+}
+
+export interface AdminEvent {
+  id: number;
+  created_at: string;
+  endpoint: string;
+  endpoint_label: string;
+  model_used: string | null;
+  field: string | null;
+  field_label: string | null;
+  group_size: number | null;
+  recommended_price: number | null;
+  response_ms: number;
+  status_code: number;
+}
+
+export interface AdminRecent {
+  limit: number;
+  currency: string;
+  events: AdminEvent[];
 }
 
 /* ----------------------------------------------------------------- errors */

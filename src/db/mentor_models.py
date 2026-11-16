@@ -34,6 +34,11 @@ model:
     which the database enforces. Separate from the recommendation on purpose:
     the system advises and the mentor decides, and keeping the two rows apart
     is what makes that separation auditable rather than merely claimed.
+``request_logs``
+    One row per call to a path that scores a model, for the operations
+    dashboard. It records what was asked of the model and how long the answer
+    took, and deliberately nothing about who asked: no name, no address, no
+    free text and no network address. See :class:`RequestLog`.
 
 Written against PostgreSQL, which is the deployment target, and run on SQLite
 locally. Nothing here is SQLite-specific: ``JSON`` is the portable type that
@@ -93,6 +98,22 @@ RECOMMENDATION_STATUSES: tuple[str, ...] = (
 # instead, "rejected" carries none.
 DECISION_ACTIONS: tuple[str, ...] = ("accepted", "modified", "rejected")
 
+# The four calls that score a model, named for what the mentor was doing
+# rather than for the HTTP path. A path can be renamed and a stored row has to
+# stay readable, and "preview" says more to whoever reads the dashboard than
+# "POST /preview" does.
+#
+#   "preview"        the live figure on the registration form, no account yet
+#   "registration"   the first price, given as the account is created
+#   "service_added"  a price for a service an existing mentor just added
+#   "recalculation"  a fresh price for a service, asked for from the dashboard
+LOG_ENDPOINTS: tuple[str, ...] = (
+    "preview",
+    "registration",
+    "service_added",
+    "recalculation",
+)
+
 
 def _in_clause(column: str, values: tuple[str, ...]) -> str:
     quoted = ", ".join(f"'{value}'" for value in values)
@@ -135,6 +156,19 @@ class Mentor(Base):
     # optional and nothing about the price depends on it.
     years_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
     years_mentoring_band: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Whether this account may read the operations dashboard under /admin.
+    # Nothing a mentor sends can set it, for the same reason as "verified"
+    # above: it is a statement the platform makes about an account rather
+    # than one the account makes about itself. It is set by
+    # scripts/seed_admin.py, which is run by whoever administers the
+    # deployment, and there is no endpoint that grants or revokes it.
+    #
+    # One flag rather than a roles table. There are two kinds of account in
+    # this system, a mentor and an administrator, and a join table for a
+    # second value would be a schema built for a requirement nobody has.
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", index=True
+    )
     # A mentor created by scripts/seed_demo_mentors.py to have something to
     # demonstrate. Flagged rather than inferred from the email domain, so the
     # seed script can find its own rows again and remove exactly those.
@@ -558,4 +592,108 @@ class PricingDecision(Base):
         return (
             f"PricingDecision(id={self.id!r}, "
             f"recommendation_id={self.recommendation_id!r}, action={self.action!r})"
+        )
+
+
+class RequestLog(Base):
+    """
+    One call to a path that scored a model, for the operations dashboard.
+
+    Why this table exists: the application can say what it advised, because
+    every recommendation is stored. It could not say how often it was asked,
+    which model answered, how long an answer took, or how many of those calls
+    failed. Those are questions about the service rather than about any
+    mentor, and none of them can be answered from the tables above: a preview
+    stores nothing at all by design, and a recommendation row carries no
+    timing and no status.
+
+    **What is deliberately not here.** No name, no email address, no free
+    text, no network address, no user agent and no request body. The columns
+    are a field id, two counts, a price, a range, a duration and a status
+    code, and the only identifier is ``mentor_id`` on a call that carried a
+    token. A row therefore says what was asked of the model and what it
+    answered, and nothing that could identify who asked it.
+
+    ``mentor_id`` is a plain integer rather than a foreign key, and that is a
+    decision rather than an oversight. The log is a record of what the service
+    did, not a child row of an account: it has to survive the account being
+    removed, which is what the demonstration seeding script does on every
+    ``--reset``. A cascade would delete the history of the service's own
+    behaviour along with the mentor, and a restrict would stop the mentor
+    being deleted at all.
+
+    Every column describing the model's answer is nullable, because a row is
+    written for a call that failed as well as for one that succeeded. A
+    rate-limited preview, or a call to a server whose models were never
+    prepared, has a status code and a duration and no price: nulls say that
+    plainly, where zeros would record a prediction of nothing.
+    """
+
+    __tablename__ = "request_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=utcnow, nullable=False, index=True
+    )
+    # One of LOG_ENDPOINTS. Indexed because the dashboard groups by it.
+    endpoint: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # "core" or "full", or null for a call that never reached a model.
+    model_used: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # The field id the price was asked about, as the mapping layer spells it.
+    # An id and not a label: a label is display text and would have to be
+    # re-translated every time the wording changed.
+    field: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    group_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    skills_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Set on a call that carried an access token, null on the preview, which
+    # has no account behind it. See the note in the class docstring on why
+    # this is not a foreign key.
+    mentor_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Whole currency units, the same scale as a stored recommendation, so the
+    # two can be compared without one of them pretending to be finer.
+    recommended_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    range_low: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    range_high: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # How long the whole request took, measured around the application rather
+    # than around the model call, because that is what the caller waited for.
+    response_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            _in_clause("endpoint", LOG_ENDPOINTS), name="ck_request_log_endpoint"
+        ),
+        CheckConstraint(
+            f"model_used IS NULL OR {_in_clause('model_used', MODEL_CHOICES)}",
+            name="ck_request_log_model",
+        ),
+        CheckConstraint("response_ms >= 0", name="ck_request_log_response_ms"),
+        CheckConstraint(
+            "status_code BETWEEN 100 AND 599", name="ck_request_log_status_code"
+        ),
+        # NULL is tested explicitly in each: a bare comparison against NULL
+        # evaluates to NULL rather than FALSE, and a CHECK only rejects a row
+        # on FALSE, so the comparison alone would be no constraint at all on a
+        # row with no figure while also failing to say that none is allowed.
+        CheckConstraint(
+            "group_size IS NULL OR group_size > 0", name="ck_request_log_group_size"
+        ),
+        CheckConstraint(
+            "skills_count IS NULL OR skills_count >= 0",
+            name="ck_request_log_skills_count",
+        ),
+        CheckConstraint(
+            "(recommended_price IS NULL AND range_low IS NULL "
+            "   AND range_high IS NULL) "
+            "OR (recommended_price > 0 AND range_low > 0 AND range_high > 0 "
+            "   AND range_low <= recommended_price "
+            "   AND recommended_price <= range_high)",
+            name="ck_request_log_price_within_range",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"RequestLog(id={self.id!r}, endpoint={self.endpoint!r}, "
+            f"model_used={self.model_used!r}, status_code={self.status_code!r})"
         )

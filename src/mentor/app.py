@@ -46,6 +46,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from src.db import get_session
 from src.db.mentor_models import (
@@ -58,8 +59,13 @@ from src.db.mentor_models import (
 )
 from src.mentor import comparables as comparables_module
 from src.mentor import explanation as explanation_module
-from src.mentor import mapping, security
-from src.mentor.dependencies import get_current_mentor_id, unauthorized
+from src.mentor import mapping, request_log, security
+from src.mentor.admin import router as admin_router
+from src.mentor.dependencies import (
+    get_current_mentor_id,
+    signed_in_mentor,
+    unauthorized,
+)
 from src.mentor.prediction import (
     ASSETS_MISSING_MESSAGE,
     POSITION_ABOVE,
@@ -73,6 +79,7 @@ from src.mentor.prediction import (
     position_vs_range,
 )
 from src.mentor.rate_limit import RateLimiter
+from src.mentor.request_log import PriceEvent
 from src.mentor.schemas import (
     ActivityOut,
     ComparableItemOut,
@@ -220,6 +227,16 @@ records, and a request for someone else's returns 404 rather than 403, because
 
 Signing out is the client discarding the token. The server keeps no session,
 so there is nothing for it to end.
+
+A separate set of paths under `/admin` reports on the service rather than on
+any mentor: how often each pricing path was called, which model answered, how
+long it took, what the models have been advising, and how the two models
+scored on the rows they were held back from. They are read only, they are open
+to administrator accounts alone, and none of them returns a name, an address
+or a mentor id. An account that is signed in and is not an administrator is
+refused with 403 rather than 404, because `/admin` is a fixed set of paths
+with nothing per-account about it and so there is nothing for a 404 to
+conceal.
 """
 
 TAGS: list[dict[str, Any]] = [
@@ -245,6 +262,12 @@ TAGS: list[dict[str, Any]] = [
     {
         "name": "demo",
         "description": "Mentors seeded so there is something to demonstrate.",
+    },
+    {
+        "name": "admin",
+        "description": (
+            "Read-only figures about the service itself. Administrators only."
+        ),
     },
 ]
 
@@ -344,6 +367,40 @@ def allowed_origins(raw: str | None = None) -> list[str]:
     origins = [part.strip().rstrip("/") for part in value.split(",")]
     origins = [origin for origin in origins if origin]
     return origins or list(DEFAULT_ALLOWED_ORIGINS)
+
+
+# ---------------------------------------------------------------------------
+# Recording what was asked of the models
+# ---------------------------------------------------------------------------
+# The four paths that score a model each record what they were asked, and this
+# middleware adds the two things none of them can know about themselves: how
+# long the whole request took, and what status it answered with. An endpoint
+# that raises never reaches its own last line, so it could not log its own
+# failure, and a duration measured inside a handler leaves out everything the
+# caller actually waited for.
+#
+# The row is written in a background task, which Starlette runs after the
+# response body has been sent and in a worker thread, so a mentor has their
+# price before the row exists and a slow write costs them nothing. See
+# src.mentor.request_log for why a failed write is swallowed.
+@app.middleware("http")
+async def record_price_requests(request: Request, call_next):
+    """Time every request, and log the ones that asked for a price."""
+    started = request_log.started()
+    response = await call_next(request)
+    event = request_log.event_of(request)
+    if event is not None:
+        request_log.attach(
+            response,
+            BackgroundTask(
+                request_log.write,
+                event,
+                request_log.elapsed_ms(started),
+                response.status_code,
+                request_log.sessions_for(request.app),
+            ),
+        )
+    return response
 
 
 app.add_middleware(
@@ -652,6 +709,11 @@ def as_mentor(mentor: Mentor) -> MentorOut:
         years_mentoring_band=mentor.years_mentoring_band,
         verified=bool(mentor.verified),
         is_demo=bool(mentor.is_demo),
+        # Read from the row, not left to the schema's default. This response
+        # is what the frontend decides whether to draw the Admin link from,
+        # and a default of false here is an administrator who cannot find
+        # their own pages.
+        is_admin=bool(mentor.is_admin),
         services=[ServiceOut.model_validate(service) for service in mentor.services],
         history=(
             as_history_summary(mentor.history) if mentor.history is not None else None
@@ -1095,6 +1157,19 @@ async def preview_price(
     behind it and every call scores a model. See src.mentor.rate_limit for
     exactly how little that limit claims to be.
     """
+    # Recorded before the rate limit and before the model, so a refused
+    # preview is in the log as a refused preview. The address the limit is
+    # keyed by is not part of the event: see src.mentor.request_log.
+    request_log.record(
+        request,
+        PriceEvent(
+            endpoint="preview",
+            field=payload.field,
+            group_size=payload.max_mentees,
+            skills_count=len(payload.skills),
+        ),
+    )
+
     caller = request.client.host if request.client else "unknown"
     if not preview_limiter.allow(caller):
         raise HTTPException(
@@ -1113,6 +1188,7 @@ async def preview_price(
             services_count=1,
         )
     )
+    request_log.note_advice(request, advice)
     return PreviewOut(
         session_price=advice.recommended_price,
         per_person_price=advice.price_per_mentee,
@@ -1148,24 +1224,6 @@ def mentor_by_email(session: Session, email: str) -> Mentor | None:
     )
 
 
-def signed_in_mentor(
-    session: Session = Depends(get_session),
-    current_mentor_id: int = Depends(get_current_mentor_id),
-) -> Mentor:
-    """
-    The mentor the token belongs to, or 401.
-
-    A token that is perfectly valid but names a mentor who no longer exists is
-    not a request for a missing record: it is an identity that cannot be
-    established, which is what 401 means. That is the one case where a signed
-    request answers 401 rather than 404.
-    """
-    mentor = session.get(Mentor, current_mentor_id)
-    if mentor is None:
-        raise unauthorized()
-    return mentor
-
-
 @app.post(
     "/auth/register",
     tags=["auth"],
@@ -1176,6 +1234,7 @@ def signed_in_mentor(
 )
 async def register_mentor(
     payload: MentorRegistration,
+    request: Request,
     session: Session = Depends(get_session),
     pricing: PricingService = Depends(get_pricing),
 ) -> RegistrationOut:
@@ -1195,6 +1254,19 @@ async def register_mentor(
     makes about a mentor after a person has looked, so nothing a mentor sends
     can set it, including on this endpoint.
     """
+    # Recorded before the account exists, so a registration refused as a
+    # duplicate address is in the log too. The mentor id is added once there
+    # is one: see note_mentor below.
+    request_log.record(
+        request,
+        PriceEvent(
+            endpoint="registration",
+            field=payload.field,
+            group_size=payload.max_mentees,
+            skills_count=len(payload.skills),
+        ),
+    )
+
     mentor = Mentor(
         full_name=payload.name,
         email=payload.email,
@@ -1233,8 +1305,10 @@ async def register_mentor(
         ) from None
     session.refresh(mentor)
     session.refresh(service)
+    request_log.note_mentor(request, mentor.id)
 
     record = recommend_for_service(session, pricing, service, mentor)
+    request_log.note_advice(request, record)
     return RegistrationOut(
         **issued_token(mentor.id),
         mentor=as_mentor(mentor),
@@ -1437,6 +1511,7 @@ async def read_mentor(
 async def add_service(
     mentor_id: int,
     payload: ServiceInput,
+    request: Request,
     session: Session = Depends(get_session),
     current_mentor_id: int = Depends(get_current_mentor_id),
     pricing: PricingService = Depends(get_pricing),
@@ -1453,6 +1528,20 @@ async def add_service(
     as a first service. That is the intended behaviour rather than a quirk:
     see ``mapping.effective_services``.
     """
+    # The id from the token, not the one in the path: the path is what the
+    # caller asked for and the token is who they are, and a call for somebody
+    # else's mentor id is logged against the account that made it.
+    request_log.record(
+        request,
+        PriceEvent(
+            endpoint="service_added",
+            field=payload.field,
+            group_size=payload.max_mentees,
+            skills_count=len(payload.skills),
+            mentor_id=current_mentor_id,
+        ),
+    )
+
     mentor = session.scalar(
         select(Mentor).where(Mentor.id == mentor_id, Mentor.id == current_mentor_id)
     )
@@ -1476,6 +1565,7 @@ async def add_service(
     session.refresh(service)
 
     record = recommend_for_service(session, pricing, service, mentor)
+    request_log.note_advice(request, record)
     return ServiceCreatedOut(
         service=ServiceOut.model_validate(service),
         recommendation=as_recommendation(record, service.current_price),
@@ -1518,6 +1608,7 @@ async def read_service(
 )
 async def create_recommendation(
     service_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_mentor_id: int = Depends(get_current_mentor_id),
     pricing: PricingService = Depends(get_pricing),
@@ -1529,13 +1620,30 @@ async def create_recommendation(
     of what the system advised is the record of whether its advice was any
     good, so it is kept.
     """
+    # Recorded twice on the way through: once before the lookup, so a call
+    # for a service that is not the mentor's is in the log as a 404, and
+    # again with what the service turned out to be.
+    request_log.record(
+        request, PriceEvent(endpoint="recalculation", mentor_id=current_mentor_id)
+    )
     service = owned_service(session, service_id, current_mentor_id)
+    request_log.record(
+        request,
+        PriceEvent(
+            endpoint="recalculation",
+            field=service.field,
+            group_size=service.max_mentees,
+            skills_count=len(service.skills or []),
+            mentor_id=current_mentor_id,
+        ),
+    )
     mentor = session.get(Mentor, current_mentor_id)
     if mentor is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
         )
     record = recommend_for_service(session, pricing, service, mentor)
+    request_log.note_advice(request, record)
     return as_recommendation(record, service.current_price)
 
 
@@ -2405,3 +2513,14 @@ async def read_dashboard(
         ),
         services=services,
     )
+
+
+# ---------------------------------------------------------------------------
+# The operations dashboard
+# ---------------------------------------------------------------------------
+# Mounted last, and as a router rather than as endpoints on this module, for
+# two reasons. It has a different audience, so keeping it in one file makes
+# "what can an administrator read" a question with one answer. And the guard
+# is declared once on the router, so an endpoint added to it later cannot be
+# added without one.
+app.include_router(admin_router)
