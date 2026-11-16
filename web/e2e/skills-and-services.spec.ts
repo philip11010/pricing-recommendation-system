@@ -10,6 +10,11 @@ import { API_URL, registerMentor, requireApi } from "./helpers";
  * list; this checks the copy against the API, which is what catches the copy
  * going stale.
  *
+ * It reads the form before a field has been picked, which is the one state
+ * where all thirty pills carry the API's own labels. Once a field is picked
+ * the ten under "skills at work" are named for that field instead, and
+ * field-skills.spec.ts is where that is checked.
+ *
  * The second is adding a second service, which is the only path that reaches
  * a price without going through registration.
  */

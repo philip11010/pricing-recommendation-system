@@ -54,6 +54,7 @@ CARD_KEYS = {
 }
 
 PROFILE_KEYS = CARD_KEYS | {
+    "field",
     "skills",
     "years_experience",
     "years_mentoring_band",
@@ -435,6 +436,34 @@ def test_a_public_profile_lists_the_skills_with_their_labels(client):
     assert [skill["id"] for skill in body["skills"]] == REGISTRATION["skills"]
     assert all(skill["label"] for skill in body["skills"])
     assert body["skills"][0]["label"] == mapping.SKILLS[REGISTRATION["skills"][0]]
+
+
+def test_a_public_profile_names_the_field_by_id_as_well_as_by_label(client):
+    """
+    The id beside the label, so the skills can be read under the right field.
+
+    A profile shows the ten skills under "skills at work" named for the field
+    the mentor works in, and the names live in the frontend. Matching them
+    back from ``field_label`` would mean reversing a translation this API had
+    already made, so the id it translated from is published too. Nothing else
+    about the response changes, and the label is still what a reader sees.
+    """
+    created = register(client)
+    mentor_id = created["mentor"]["id"]
+    field = created["service"]["field"]
+
+    body = client.get(f"/mentors/{mentor_id}/public").json()
+
+    assert body["field"] == field == REGISTRATION["field"]
+    assert body["field_label"] == mapping.field_label(field)
+    assert body["field"] != body["field_label"]
+    # The directory itself is unchanged: a card has no field id on it.
+    card = next(
+        item
+        for item in client.get("/mentors").json()["items"]
+        if item["id"] == mentor_id
+    )
+    assert set(card) == CARD_KEYS
 
 
 def test_a_public_profile_leaves_out_what_the_mentor_did_not_answer(client):

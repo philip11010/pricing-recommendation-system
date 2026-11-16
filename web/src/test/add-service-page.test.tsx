@@ -8,6 +8,11 @@
  *
  * The live preview beside the form is mocked out. It asks the API for a
  * price on a timer, which is a different thing from what this file is about.
+ *
+ * The skills at work are read under the prefilled service's own field, so the
+ * ten labels the form opens with are the ten the mentor saw when they
+ * described that service. Changing the field clears those ticks and says so,
+ * the same rule the registration form follows, and the rest of the ticks stay.
  */
 
 import { render, screen } from "@testing-library/react";
@@ -16,6 +21,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Mentor, OptionsResponse, Service } from "@/lib/api-types";
+import { WORK_SKILLS_RESET_NOTE } from "@/lib/copy";
 import { mostRecentService, startingGroupSize } from "@/lib/prefill";
 
 function service(id: number, maxMentees: number, field: string): Service {
@@ -26,7 +32,9 @@ function service(id: number, maxMentees: number, field: string): Service {
     field,
     max_mentees: maxMentees,
     min_commitment: 1,
-    skills: ["cv_review"],
+    // One skill from a constant heading and one from "skills at work", so a
+    // field change has something to keep and something to clear.
+    skills: ["cv_review", "leadership"],
     profile_verified: true,
     current_price: 300,
     created_at: "2025-01-01T00:00:00Z",
@@ -47,10 +55,7 @@ const MENTOR: Mentor = {
   verified: true,
   is_demo: false,
   // Oldest first, as the API sends them.
-  services: [
-    service(1, 1, "technology_software"),
-    service(2, 6, "business_entrepreneurship"),
-  ],
+  services: [service(1, 1, "technology_software"), service(2, 6, "law")],
   history: null,
   created_at: "2025-01-01T00:00:00Z",
 };
@@ -59,11 +64,13 @@ const OPTIONS: OptionsResponse = {
   currency: "AUD",
   fields: [
     { id: "technology_software", label: "Technology and software" },
-    { id: "business_entrepreneurship", label: "Business and entrepreneurship" },
+    { id: "law", label: "Law" },
   ],
   skills: [
     { id: "cv_review", label: "CV review" },
     { id: "interview_preparation", label: "Interview preparation" },
+    { id: "leadership", label: "Leadership" },
+    { id: "mentoring_skills", label: "Mentoring skills" },
   ],
   max_mentees: { min: 1, max: 8 },
   session_label_rule: {
@@ -151,11 +158,52 @@ describe("the form itself", () => {
     render(<AddServicePage />);
 
     const field = await screen.findByLabelText(/Field/);
-    expect(field).toHaveValue("business_entrepreneurship");
+    expect(field).toHaveValue("law");
     expect(screen.getByRole("checkbox", { name: "CV review" })).toBeChecked();
     expect(
       screen.getByRole("checkbox", { name: "Interview preparation" }),
     ).not.toBeChecked();
+  });
+
+  it("names the skills at work for the prefilled service's field", async () => {
+    render(<AddServicePage />);
+
+    await screen.findByLabelText(/Field/);
+    // Slot work_1 and work_7, under the law labels rather than the API's own.
+    expect(screen.getByRole("checkbox", { name: "Legal research" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Case analysis" })).not.toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: "Leadership" })).toBeNull();
+    expect(screen.queryByText(WORK_SKILLS_RESET_NOTE)).toBeNull();
+  });
+
+  it("swaps the labels and clears those ticks when the field changes", async () => {
+    const user = userEvent.setup();
+    render(<AddServicePage />);
+
+    const field = await screen.findByLabelText(/Field/);
+    await user.selectOptions(field, "technology_software");
+
+    const note = screen.getByText(WORK_SKILLS_RESET_NOTE);
+    expect(note).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("checkbox", { name: "Legal research" })).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "System design" })).not.toBeChecked();
+    // The constant headings keep their meaning, so they keep their ticks.
+    expect(screen.getByRole("checkbox", { name: "CV review" })).toBeChecked();
+  });
+
+  it("says nothing when the field change had no skill at work to clear", async () => {
+    mentor = {
+      ...MENTOR,
+      services: [{ ...service(3, 2, "law"), skills: ["cv_review"] }],
+    };
+    const user = userEvent.setup();
+    render(<AddServicePage />);
+
+    const field = await screen.findByLabelText(/Field/);
+    await user.selectOptions(field, "technology_software");
+
+    expect(screen.queryByText(WORK_SKILLS_RESET_NOTE)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "CV review" })).toBeChecked();
   });
 
   it("opens at one person for a mentor with no service to read", async () => {

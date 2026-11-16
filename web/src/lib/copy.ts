@@ -82,10 +82,18 @@ export const NO_PRICE_SET =
  * /meta/options, and a test checks that every id the API publishes appears
  * here exactly once, so a skill added to the API cannot go missing from the
  * form.
+ *
+ * Three of the four headings mean the same thing to every mentor. The fourth
+ * is marked `fieldSpecific`, and the labels under it are the web
+ * application's as well: they change with the field the mentor picked, and
+ * they live in lib/work-skills.ts. The ids under it do not change, so nothing
+ * about what is sent, stored or priced depends on which field is showing.
  */
 export interface SkillGroup {
   name: string;
   skillIds: string[];
+  /** Whether the labels under this heading follow the mentor's field. */
+  fieldSpecific?: boolean;
 }
 
 export const SKILL_GROUPS: SkillGroup[] = [
@@ -116,6 +124,7 @@ export const SKILL_GROUPS: SkillGroup[] = [
   },
   {
     name: "Skills at work",
+    fieldSpecific: true,
     skillIds: [
       "leadership",
       "public_speaking",
@@ -140,6 +149,18 @@ export const SKILL_GROUPS: SkillGroup[] = [
     ],
   },
 ];
+
+/**
+ * What the form says when a field change clears the skills at work.
+ *
+ * Said rather than left to be noticed. The ten labels under that heading are
+ * about to be ten different labels, so the ticks made against the old ones
+ * are dropped: carrying them over would credit a mentor with skills they
+ * never chose, and dropping them silently would leave them wondering where
+ * their answers went.
+ */
+export const WORK_SKILLS_RESET_NOTE =
+  "Skills at work are different in each field, so we cleared those ticks for your new field. Everything else you ticked is still there.";
 
 /** Every skill id this application has a group for, as a flat set. */
 export const GROUPED_SKILL_IDS: string[] = SKILL_GROUPS.flatMap(

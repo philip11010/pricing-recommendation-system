@@ -1045,6 +1045,7 @@ async def read_public_profile(
         )
     return PublicMentorOut(
         **mentor_card(mentor, service),
+        field=service.field,
         skills=[
             SkillOut(id=skill, label=mapping.SKILLS[skill])
             for skill in (service.skills or [])

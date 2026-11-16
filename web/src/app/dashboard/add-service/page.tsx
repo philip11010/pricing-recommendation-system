@@ -13,29 +13,38 @@
  * of them can be changed. The most recent rather than the first: a mentor who
  * has moved from one to one sessions to groups of six would otherwise be
  * handed the one to one they set up when they joined, every time.
+ *
+ * The prefilled skills are read under that service's own field, so the ten
+ * labels a mentor sees on opening the form are the ten they saw when they
+ * described it. Changing the field here clears the ticked skills at work and
+ * says so, exactly as the registration form does, because the ten labels are
+ * about to become ten different labels.
  */
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
-import { PillCheckbox, SelectInput, Stepper } from "@/components/form";
+import { SelectInput, Stepper } from "@/components/form";
 import { PricePreview } from "@/components/price-preview";
 import { RequireAuth } from "@/components/require-auth";
+import { SkillPills } from "@/components/skill-pills";
 import {
   Banner,
   Button,
   Column,
   ErrorNotice,
   LoadingBlock,
+  Note,
   TextLink,
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
 import type { Mentor, OptionsResponse } from "@/lib/api-types";
-import { SKILL_GROUPS } from "@/lib/copy";
+import { WORK_SKILLS_RESET_NOTE } from "@/lib/copy";
 import { ApiError, messageFor, toFieldErrors } from "@/lib/errors";
 import { mostRecentService, startingGroupSize } from "@/lib/prefill";
 import { refreshMentor } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
+import { countWorkSkills, withoutWorkSkills } from "@/lib/work-skills";
 
 function AddServiceForm({
   mentor,
@@ -55,16 +64,27 @@ function AddServiceForm({
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  /* Whether the last field change dropped any ticked skills at work. */
+  const [workSkillsReset, setWorkSkillsReset] = useState(false);
 
-  const skillLabels = useMemo(() => {
-    const labels = new Map<string, string>();
-    for (const skill of options.skills) {
-      labels.set(skill.id, skill.label);
+  /**
+   * Pick a field, and start the skills at work again.
+   *
+   * The same rule as the registration form: the ticked skills at work go and
+   * the three constant headings stay. A mentor who opens this form and leaves
+   * the prefilled field alone is told nothing, because nothing changed.
+   */
+  function chooseField(next: string) {
+    if (next === field) {
+      return;
     }
-    return labels;
-  }, [options.skills]);
+    setWorkSkillsReset(countWorkSkills(skills) > 0);
+    setField(next);
+    setSkills((was) => withoutWorkSkills(was));
+  }
 
   function toggleSkill(id: string, on: boolean) {
+    setWorkSkillsReset(false);
     setSkills((was) => (on ? [...was, id] : was.filter((skill) => skill !== id)));
   }
 
@@ -131,7 +151,7 @@ function AddServiceForm({
             placeholder="Choose a field"
             options={options.fields}
             value={field}
-            onChange={(event) => setField(event.target.value)}
+            onChange={(event) => chooseField(event.target.value)}
             error={problems.field ?? null}
           />
 
@@ -160,25 +180,17 @@ function AddServiceForm({
               {problems.skills}
             </p>
           ) : null}
-          {SKILL_GROUPS.map((group) => (
-            <fieldset key={group.name} className="mt-5 min-w-0">
-              <legend className="mb-2.5 text-overline uppercase text-ink-500">
-                {group.name}
-              </legend>
-              <div className="flex flex-wrap gap-2">
-                {group.skillIds
-                  .filter((id) => skillLabels.has(id))
-                  .map((id) => (
-                    <PillCheckbox
-                      key={id}
-                      label={skillLabels.get(id) ?? id}
-                      checked={skills.includes(id)}
-                      onChange={(on) => toggleSkill(id, on)}
-                    />
-                  ))}
-              </div>
-            </fieldset>
-          ))}
+          {workSkillsReset ? (
+            <Note tone="info" role="status" className="mt-3">
+              {WORK_SKILLS_RESET_NOTE}
+            </Note>
+          ) : null}
+          <SkillPills
+            field={field}
+            skills={options.skills}
+            chosen={skills}
+            onToggle={toggleSkill}
+          />
         </section>
 
         <Button type="submit" disabled={sending} aria-busy={sending}>

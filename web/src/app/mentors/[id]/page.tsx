@@ -12,6 +12,12 @@
  * arrives in the address from the card that was clicked. A reader who had
  * narrowed the list to one field and came back to all of it would have to
  * narrow it again, and the link is there to prevent exactly that.
+ *
+ * The skills are read under this mentor's own field. The ten under "skills
+ * at work" are named for the field, so the chips here say what the mentor
+ * was asked when they ticked them rather than what a generic list calls it.
+ * The API sends the label as well, and that is what is shown for the three
+ * headings that mean the same thing in every field.
  */
 
 import { Suspense } from "react";
@@ -32,6 +38,7 @@ import { api } from "@/lib/api-client";
 import { isNotFound, messageFor } from "@/lib/errors";
 import { FIELD_QUERY, directoryHref } from "@/lib/origin";
 import { useAsync } from "@/lib/use-async";
+import { workSkillLabels } from "@/lib/work-skills";
 
 function PublicProfile() {
   const params = useParams<{ id: string }>();
@@ -44,6 +51,9 @@ function PublicProfile() {
     (signal) => api.publicMentor(mentorId, signal),
     `public-mentor-${mentorId}`,
   );
+
+  // Keyed by skill id, so a chip reads its own label straight off it.
+  const workLabels = workSkillLabels(data?.field);
 
   const about = [
     data?.years_experience !== null && data?.years_experience !== undefined
@@ -104,7 +114,9 @@ function PublicProfile() {
                 {data.skills.length > 0 ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {data.skills.map((skill) => (
-                      <Chip key={skill.id}>{skill.label}</Chip>
+                      <Chip key={skill.id}>
+                        {workLabels.get(skill.id) ?? skill.label}
+                      </Chip>
                     ))}
                   </div>
                 ) : (

@@ -165,6 +165,14 @@ export interface MentorDirectory {
 }
 
 export interface PublicMentor extends MentorCard {
+  /**
+   * The id of the field this profile's service is in.
+   *
+   * Beside `field_label`, which is what a reader sees. The id is here because
+   * the ten skills under "skills at work" are named for the field, so showing
+   * this mentor's skills means knowing which field to read them under.
+   */
+  field: string;
   skills: Option[];
   years_experience: number | null;
   years_mentoring_band: string | null;

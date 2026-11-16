@@ -8,41 +8,50 @@
  * offer, the skills they cover, and an optional collapsed section for the
  * three profile fields that are shown on their card and never priced.
  *
- * Every option list comes from /meta/options. The only part of the skill list
- * this file decides is which of the four headings each skill is read under,
- * and that lives in lib/copy.ts with a test that none can go missing.
+ * Every option list comes from /meta/options. The parts of the skill list
+ * this application decides are which of the four headings each skill is read
+ * under, in lib/copy.ts, and what the ten under "skills at work" are called
+ * for each field, in lib/work-skills.ts. Both are tested so that nothing can
+ * go missing.
+ *
+ * Changing the field clears the ticked skills at work and says so. The ten
+ * labels under that heading are about to be ten different labels, so a tick
+ * made against one of the old ones is not evidence about one of the new ones.
+ * The other three headings keep their ticks, because they keep their meaning.
  *
  * The answers live in one component with the preview panel, so the figure
  * beside the form is worked out from the same state the form submits.
  */
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ErrorSummary,
-  PillCheckbox,
   SelectInput,
   Stepper,
   TextInput,
   type SummaryProblem,
 } from "@/components/form";
 import { PricePreview } from "@/components/price-preview";
+import { SkillPills } from "@/components/skill-pills";
 import {
   Banner,
   Button,
   Column,
   ErrorNotice,
   LoadingBlock,
+  Note,
   TextLink,
 } from "@/components/ui";
 import { api } from "@/lib/api-client";
 import type { OptionsResponse } from "@/lib/api-types";
-import { SKILL_GROUPS, UNVERIFIED_AFTER_SUBMIT } from "@/lib/copy";
+import { UNVERIFIED_AFTER_SUBMIT, WORK_SKILLS_RESET_NOTE } from "@/lib/copy";
 import { ApiError, messageFor, toFieldErrors } from "@/lib/errors";
 import { setMentor } from "@/lib/session";
 import { writeToken } from "@/lib/token";
 import { useAsync } from "@/lib/use-async";
+import { countWorkSkills, withoutWorkSkills } from "@/lib/work-skills";
 
 const PASSWORD_MIN = 8;
 
@@ -136,14 +145,14 @@ function Registration({ options }: { options: OptionsResponse }) {
    * can see is an error nobody can fix.
    */
   const [optionalOpen, setOptionalOpen] = useState(false);
-
-  const skillLabels = useMemo(() => {
-    const labels = new Map<string, string>();
-    for (const skill of options.skills) {
-      labels.set(skill.id, skill.label);
-    }
-    return labels;
-  }, [options.skills]);
+  /*
+   * Whether the last field change dropped any ticked skills at work.
+   *
+   * Only shown when it actually dropped something: a mentor who changes
+   * their field before ticking anything has nothing to be told about, and a
+   * notice about an empty list is noise.
+   */
+  const [workSkillsReset, setWorkSkillsReset] = useState(false);
 
   const problems = {
     ...localProblems(answers, options.years_experience),
@@ -176,7 +185,29 @@ function Registration({ options }: { options: OptionsResponse }) {
     setFromApi({ fields: {}, general: [] });
   }
 
+  /**
+   * Pick a field, and start the skills at work again.
+   *
+   * The ticked skills at work are dropped and the three constant headings are
+   * left alone. Done here rather than in an effect on the field, so the
+   * clearing happens exactly when the mentor acts and the preview beside the
+   * form sees one new set of answers rather than two.
+   */
+  function chooseField(next: string) {
+    if (next === answers.field) {
+      return;
+    }
+    setWorkSkillsReset(countWorkSkills(answers.skills) > 0);
+    setAnswers((was) => ({
+      ...was,
+      field: next,
+      skills: withoutWorkSkills(was.skills),
+    }));
+    setFromApi({ fields: {}, general: [] });
+  }
+
   function toggleSkill(id: string, on: boolean) {
+    setWorkSkillsReset(false);
     setAnswers((was) => ({
       ...was,
       skills: on ? [...was.skills, id] : was.skills.filter((skill) => skill !== id),
@@ -289,7 +320,7 @@ function Registration({ options }: { options: OptionsResponse }) {
             placeholder="Choose a field"
             options={options.fields}
             value={answers.field}
-            onChange={(event) => update("field", event.target.value)}
+            onChange={(event) => chooseField(event.target.value)}
             onBlur={() => setTouched((was) => ({ ...was, field: true }))}
             error={show("field")}
           />
@@ -320,25 +351,17 @@ function Registration({ options }: { options: OptionsResponse }) {
               {show("skills")}
             </p>
           ) : null}
-          {SKILL_GROUPS.map((group) => (
-            <fieldset key={group.name} className="mt-5 min-w-0">
-              <legend className="mb-2.5 text-overline uppercase text-ink-500">
-                {group.name}
-              </legend>
-              <div className="flex flex-wrap gap-2">
-                {group.skillIds
-                  .filter((id) => skillLabels.has(id))
-                  .map((id) => (
-                    <PillCheckbox
-                      key={id}
-                      label={skillLabels.get(id) ?? id}
-                      checked={answers.skills.includes(id)}
-                      onChange={(on) => toggleSkill(id, on)}
-                    />
-                  ))}
-              </div>
-            </fieldset>
-          ))}
+          {workSkillsReset ? (
+            <Note tone="info" role="status" className="mt-3">
+              {WORK_SKILLS_RESET_NOTE}
+            </Note>
+          ) : null}
+          <SkillPills
+            field={answers.field}
+            skills={options.skills}
+            chosen={answers.skills}
+            onToggle={toggleSkill}
+          />
         </section>
 
         <details

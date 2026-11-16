@@ -674,16 +674,48 @@ confirmed, never on a brand new profile.
 
 All 30 skills are shown, none removed, in four named groups:
 
-| Group | Count |
-|---|---|
-| Getting hired | 7 |
-| Growing your career | 8 |
-| Skills at work | 10 |
-| Business and balance | 5 |
+| Group | Count | Labels |
+|---|---|---|
+| Getting hired | 7 | the same in every field |
+| Growing your career | 8 | the same in every field |
+| Skills at work | 10 | **named for the mentor's field** |
+| Business and balance | 5 | the same in every field |
 
 The group name is an `overline`, and the skills inside it are pill checkboxes
 that wrap. Grouping is what makes 30 options readable; hiding some of them is
 not.
+
+**Skills at work is field-specific.** Three of the four headings mean the same
+thing to every mentor. The fourth does not: leadership to a barrister and
+leadership to a ward registrar are different conversations. So the ten pills
+under that heading carry one of twelve lists, chosen by the field, and swap
+when the field does. The count never changes: ten pills in every field, thirty
+on the form in every field, in the same four headings and the same order.
+
+The labels live in `src/lib/work-skills.ts`, one list per field, keyed by a
+slot id, `work_1` to `work_10`. A slot is permanently bound to one of the
+skill ids the pricing API publishes, and the pill sends that id whatever it is
+called on screen. So the label is a label: it reaches nothing that is sent,
+stored or priced, and two mentors in different fields who tick the same
+positions get the same skills adjustment. No layout changes with the field.
+
+**Changing the field resets the ticks under that heading.** The ten labels are
+about to become ten different labels, so a tick made against one of the old
+ones is not evidence about one of the new ones. The other three headings keep
+their ticks. When something was actually cleared, an `info` `Note` with
+`role="status"` appears above the pills saying so, in one calm sentence, and it
+goes again as soon as the mentor ticks anything. A field change that cleared
+nothing says nothing. The live price preview is unaffected: it is sent the same
+answers it always was, and the cleared skills simply make it a shorter list.
+
+The same rule applies on **add a service** (12.8), where the form opens on the
+most recent service's field and therefore on that field's labels.
+
+Wherever a skill is shown with its label rather than counted, it is read under
+the mentor's own field. The one such place is the chip list on a mentor's
+public profile, which is served the field id beside the field label for exactly
+that reason. The recommendation page, the dashboard and the mentor cards count
+skills rather than naming them, so none of them is affected.
 
 #### 12.3.2 Live price preview
 
@@ -743,7 +775,11 @@ greeting and a white pill to add a service. On white below it:
 
 Getting a price for something new. Gradient banner, then a single narrow form:
 service name, how many people per session, and which of the mentor's own skills
-it covers. Submitting goes to the price screen.
+it covers. The skills are the same four headings as registration, with the same
+field-specific rule and the same reset note, see 12.3.1. All three answers are
+prefilled from the mentor's most recent service, so the form opens on that
+service's field and on that field's skill labels. Submitting goes to the price
+screen.
 
 ### 12.9 Navigation
 

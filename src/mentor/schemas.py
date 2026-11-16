@@ -532,8 +532,18 @@ class PublicMentorOut(MentorCardOut):
     mentor entered them, or null where they chose not to answer. None of them
     reaches a model, which is why a mentor can fill them in or clear them
     without their price moving.
+
+    ``field`` is the id of the field this profile's service is in, beside the
+    ``field_label`` a reader sees. The id rather than only the label, because
+    the frontend reads a mentor's skills under the field they mentor in, and
+    matching that back from a label would mean reversing a translation the API
+    had already made.
     """
 
+    field: str = Field(
+        description="The id of the field this profile's service is in.",
+        examples=["technology_software"],
+    )
     skills: list[SkillOut] = Field(default_factory=list)
     years_experience: int | None = Field(
         default=None,
