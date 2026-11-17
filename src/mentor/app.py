@@ -1707,20 +1707,27 @@ async def read_explanation(
             status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_MESSAGE
         )
 
-    # The comparison is read first because the account borrows one figure
-    # from it. A sentence about a mentor's group size compares it with the
-    # group the mentors in this sample typically offer, and those mentors are
-    # on the same screen, so both halves have to be reading the same sample.
     found = comparables_for(table, record.service, mentor)
-    typical = comparables_module.typical_profile(found)
-    seats = typical.get("max_mentees")
 
+    # The group size the account compares against is the typical one in the
+    # mentor's own field, across every group size, and not the typical one in
+    # the match above. A match is made on field and group size together, so
+    # its typical group size is near the mentor's own by construction, and a
+    # sentence built on it told every mentor their group was about the usual
+    # size. See comparables.typical_group_size.
+    #
+    # Read off the service's stored field rather than the mentor's record as
+    # it stands now, for the same reason the rest of the account is: this
+    # explains the price that was given, not a price that would be given
+    # today.
     account = explanation_module.explain_price(
         pricing=pricing,
         inputs=dict(record.inputs_snapshot),
         model_used=record.model_used,
         suggested_price=int(record.recommended_price),
-        typical_group_size=None if seats is None else int(round(float(seats))),
+        typical_group_size=comparables_module.typical_group_size(
+            table, record.service.field
+        ),
     )
     comparison = explanation_module.compare_price(
         found=found,

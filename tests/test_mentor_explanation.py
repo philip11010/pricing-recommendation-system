@@ -278,7 +278,108 @@ def test_demand_is_its_own_row_for_every_mentor_with_a_record(pricing):
         assert mapping.THEME_DEMAND in rows, profile
         demand = rows[mapping.THEME_DEMAND]
         assert demand["label"] == "Demand for your time"
-        assert "booked as much as yours" in demand["sentence"]
+        assert "offered time mentors like you have booked" in demand["sentence"]
+
+
+# ---------------------------------------------------------------------------
+# The demand row says what the input is and argues nothing from it
+#
+# It used to read "Mentors whose time is booked as much as yours tend to charge
+# more", which a mentor can only read one way: as a reason to put the price up
+# now that they are busy. The system has no such finding. The figure, its sign
+# and its place in the ordering are all still there; what went is the
+# instruction.
+# ---------------------------------------------------------------------------
+DEMAND_ADVICE = re.compile(
+    r"tend to charge (more|less)"
+    r"|charge (more|less) because"
+    r"|(raise|lower|put up|increase|reduce) your price"
+    r"|you (should|could) charge",
+    re.IGNORECASE,
+)
+
+
+def test_the_demand_row_describes_the_input_and_advises_nothing(pricing):
+    """
+    One sentence, the same whichever way the number points.
+
+    Asserted across both ends of the spread rather than on one profile,
+    because the fault it replaced was a sentence chosen by the direction: the
+    wording was only wrong on the profiles where the direction was read as
+    advice.
+    """
+    for profile in PROFILES[:16]:
+        account, _ = account_for(pricing, profile, FULL)
+        demand = next(
+            row for row in account["factors"] if row["key"] == mapping.THEME_DEMAND
+        )
+        said = demand["sentence"]
+
+        assert not DEMAND_ADVICE.search(said), (profile, said)
+        # What it does say: which input this is, and that it is one of them.
+        assert "one of the inputs" in said, said
+        assert "not a reason to charge more or less" in said, said
+        # The caution every row about a measured record carries.
+        assert explanation.ASSOCIATION_NOTE in said, said
+
+
+def test_the_demand_row_reads_the_same_whichever_way_it_points(pricing):
+    """
+    The sentence is a constant, so no edit can make it directional again.
+
+    A sentence per direction is how the old row came to give advice: once the
+    shape is "mentors like you tend to charge X", the only thing left to
+    choose is X.
+    """
+    said: set[str] = set()
+    directions: set[str] = set()
+    for profile in PROFILES[:24]:
+        account, _ = account_for(pricing, profile, FULL)
+        demand = next(
+            row for row in account["factors"] if row["key"] == mapping.THEME_DEMAND
+        )
+        said.add(demand["sentence"])
+        directions.add(demand["direction"])
+
+    assert said == {explanation.DEMAND_SENTENCE}
+    # The spread really does produce more than one direction, so the
+    # assertion above is not passing because every profile pointed one way.
+    assert len(directions) > 1
+
+
+def test_the_demand_row_keeps_its_number_and_its_place(pricing):
+    """
+    Only the wording changed. The figure is still the figure.
+
+    The row's effect is the one the model's own decomposition gives for the
+    demand columns, and the ordering of the card is still by size, so a
+    mentor who wants to know which way demand moved their price reads the
+    number beside it.
+    """
+    import math
+
+    for profile in PROFILES[:8]:
+        row = answers(profile)
+        row = with_record(row)
+        price = pricing.predict_many([row], FULL)[0].recommended_price
+        account = explanation.explain_price(
+            pricing=pricing,
+            inputs=row,
+            model_used=FULL,
+            suggested_price=price,
+            typical_group_size=TYPICAL_GROUP_SIZE,
+        )
+        _, parts = pricing.log_contributions(row, FULL)
+        columns = mapping.explanation_group_columns()[mapping.THEME_DEMAND]
+        expected = int(
+            round((math.exp(sum(parts[column] for column in columns)) - 1) * 100)
+        )
+
+        demand = next(
+            one for one in account["factors"] if one["key"] == mapping.THEME_DEMAND
+        )
+        assert demand["effect_pct"] == expected, profile
+        assert demand["direction"] == explanation.direction_of(expected)
 
 
 def test_a_new_mentor_is_shown_no_demand_row_at_all(pricing):
@@ -348,6 +449,13 @@ def test_the_grouped_row_is_the_smallest_thing_on_the_card(pricing, model_used):
     it was not. Where five rows cannot manage that, the account widens to
     seven rather than print the claim, and only a card already at seven is
     allowed to fall short.
+
+    One other card is allowed to fall short, and it is allowed because it
+    does not make the claim: a row that has absorbed a factor held back by
+    the plausibility guard is named "Other factors" instead, and may
+    legitimately be the largest figure on the card. Widening could not fix
+    that one either, since the factor is held back by what it would say
+    rather than by how big it is.
     """
     for profile in PROFILES[:16]:
         account, _ = account_for(pricing, profile, model_used)
@@ -357,13 +465,39 @@ def test_the_grouped_row_is_the_smallest_thing_on_the_card(pricing, model_used):
 
         smallest = min(abs(row["effect_pct"]) for row in account["factors"])
         widened = len(account["factors"]) >= explanation.MAX_FACTORS_PROMOTED
+        guarded = other["label"] == explanation.OTHER_GUARDED_LABEL
 
-        assert abs(other["effect_pct"]) < smallest or widened, (
+        assert abs(other["effect_pct"]) < smallest or widened or guarded, (
             model_used,
             profile,
             other["effect_pct"],
             smallest,
         )
+
+
+@pytest.mark.parametrize("model_used", [CORE, FULL])
+def test_the_grouped_row_is_named_for_what_it_actually_holds(pricing, model_used):
+    """
+    Only effects too small for a line each get the "small effects" name.
+
+    A row labelled "Other small effects" holding a five per cent factor the
+    guard withheld would be describing itself wrongly, and would put the
+    largest figure on the card under the smallest-sounding label.
+    """
+    for profile in PROFILES[:16]:
+        account, _ = account_for(pricing, profile, model_used)
+        other = account["other_small_effects"]
+        if other is None:
+            continue
+
+        assert other["label"] in {
+            explanation.OTHER_LABEL,
+            explanation.OTHER_GUARDED_LABEL,
+        }, other["label"]
+        if other["label"] == explanation.OTHER_LABEL:
+            smallest = min(abs(row["effect_pct"]) for row in account["factors"])
+            widened = len(account["factors"]) >= explanation.MAX_FACTORS_PROMOTED
+            assert abs(other["effect_pct"]) < smallest or widened, (profile, other)
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +514,17 @@ def test_the_grouped_row_is_the_smallest_thing_on_the_card(pricing, model_used):
 # group is one, so the sentence cannot smuggle back the comparison that was
 # never measured.
 # ---------------------------------------------------------------------------
-RAISING_WORDS = re.compile(r"\bmove the price per session up\b", re.IGNORECASE)
-LOWERING_WORDS = re.compile(r"\bmove the price per session down\b", re.IGNORECASE)
+# Both shapes the sentence can take. "usually price higher than" is used when
+# the mentor's group differs from the field's typical one, and "move the price
+# per session up" when it is the typical one or when there is no reference to
+# compare with, so a regex matching only one of them would stop checking the
+# other the moment the wording moved between them.
+RAISING_WORDS = re.compile(
+    r"\bmove the price per session up\b|\busually price higher\b", re.IGNORECASE
+)
+LOWERING_WORDS = re.compile(
+    r"\bmove the price per session down\b|\busually price lower\b", re.IGNORECASE
+)
 
 
 def group_row(account: dict) -> dict | None:
@@ -439,15 +582,17 @@ def test_one_to_one_is_named_only_when_the_group_really_is_one(pricing, model_us
             assert "one to one" not in said.lower(), (profile, said)
 
 
-def test_the_group_sentence_compares_with_the_mentors_on_the_screen(pricing):
+def test_the_group_sentence_names_the_typical_group_it_was_given(pricing):
     """
-    The comparison named is the sample's typical group, not a fixed one.
+    The reference named is the one passed in, and it is named as the field's.
 
-    A sentence that named a number from somewhere else would be describing
-    mentors the page never drew, and a reader checking it against the
-    comparison below would find two different sets of mentors.
+    A sentence that named a number from somewhere else would be comparing
+    against mentors nobody measured. The figure comes from the caller, which
+    reads it from the whole field rather than from the match: see
+    comparables.typical_group_size and the note above it.
     """
     profile = {**PROFILES[2], "max_mentees": 5}
+    label = mapping.field_label(profile["field"])
     for typical in (2, 6):
         account, _ = account_for(pricing, profile, CORE, typical_group_size=typical)
         row = group_row(account)
@@ -457,8 +602,115 @@ def test_the_group_sentence_compares_with_the_mentors_on_the_screen(pricing):
             continue
 
         assert f"typical group of {typical}" in said, (typical, said)
-        bigger = "larger" if 5 > typical else "smaller"
-        assert bigger in said, (typical, said)
+        # And whose typical group it is, so the reader knows what population
+        # the number describes.
+        assert f"in {label}" in said, (typical, said)
+        assert "among similar mentors" not in said, (typical, said)
+
+
+def test_the_group_sentence_says_so_when_the_group_is_the_typical_one(pricing):
+    """
+    A group that *is* the reference has nothing to be compared with.
+
+    The old sentence would have read "your group of 4 is the same size as the
+    typical group", which is the comparison restated. This says the group is
+    the usual size for the field, and still takes its direction from the
+    number.
+    """
+    profile = {**PROFILES[2], "max_mentees": 4}
+    label = mapping.field_label(profile["field"])
+
+    account, _ = account_for(pricing, profile, CORE, typical_group_size=4)
+    row = group_row(account)
+    assert row is not None
+    said = row["sentence"]
+    if abs(row["effect_pct"]) >= explanation.SMALL_EFFECT_PCT:
+        assert f"are the usual size in {label}" in said, said
+        assert "typical group of" not in said, said
+        movement = "up" if row["effect_pct"] > 0 else "down"
+        assert f"move the price per session {movement}" in said, said
+
+
+def test_a_one_to_one_is_compared_with_the_typical_group_in_the_field(pricing):
+    """
+    The one to one case keeps the comparison and names itself correctly.
+
+    "One to one sessions usually price lower than the typical group of 4 in
+    Technology and software" is the whole claim: a session for one is the
+    other thing the platform offers, not a group of one, and it is still
+    priced against the field it is offered in.
+    """
+    profile = {**PROFILES[2], "max_mentees": 1}
+    label = mapping.field_label(profile["field"])
+
+    account, _ = account_for(pricing, profile, CORE, typical_group_size=4)
+    row = group_row(account)
+    assert row is not None
+    said = row["sentence"]
+    if abs(row["effect_pct"]) >= explanation.SMALL_EFFECT_PCT:
+        assert said.startswith("One to one sessions"), said
+        assert f"typical group of 4 in {label}" in said, said
+
+
+def test_the_typical_group_is_measured_rather_than_assumed():
+    """
+    The reference comes out of the prepared table, not out of this file.
+
+    The brief for this change was explicit that the number may not be a
+    constant, so the test is on the function that produces it: every field
+    gets a figure, each figure is a session size the form can actually
+    produce, and an empty table produces nothing rather than a default.
+    """
+    import pandas as pd
+
+    from src.mentor import comparables as comparables_module
+
+    table = synthetic_comparables()
+    for field in mapping.FIELDS:
+        usual = comparables_module.typical_group_size(table, field)
+        assert usual is not None, field
+        assert mapping.MAX_MENTEES_MIN <= usual <= mapping.MAX_MENTEES_MAX, field
+
+    # A field with its own mentors is described by them. technology_software
+    # holds twelve rows at sizes 1 to 3 in the hand-built table, so its
+    # typical group is 2 whatever the rest of the table looks like.
+    assert comparables_module.typical_group_size(table, "technology_software") == 2
+    # engineering holds ten rows, all at eight.
+    assert comparables_module.typical_group_size(table, "engineering") == 8
+    # law holds four, which is under the minimum, so it falls back to every
+    # field together rather than describing a field from four mentors.
+    whole = comparables_module.typical_group_size(table, "law")
+    assert whole == int(round(float(table.rows["max_mentees"].median())))
+
+    empty = comparables_module.ComparablesTable(
+        pd.DataFrame(columns=list(comparables_module.COMPARABLES_COLUMNS))
+    )
+    assert comparables_module.typical_group_size(empty, "law") is None
+
+
+def test_the_typical_group_ignores_the_group_size_of_the_match(pricing):
+    """
+    The reason the reference moved, stated as a test.
+
+    A match is made on field and group size together, so the typical group
+    size inside one is close to the mentor's own by construction. This checks
+    that the figure the account uses does not move with the mentor's group
+    size, which is what made the old sentence tell every mentor their group
+    was about the usual size.
+    """
+    from src.mentor import comparables as comparables_module
+
+    table = synthetic_comparables()
+    field = "technology_software"
+    usual = comparables_module.typical_group_size(table, field)
+
+    for seats in (1, 2, 3, 8):
+        found = table.match(field=field, max_mentees=seats)
+        in_match = comparables_module.typical_profile(found)["max_mentees"]
+        # The match's own typical group follows the mentor's group around.
+        # The field's does not, which is why the account reads the field's.
+        assert comparables_module.typical_group_size(table, field) == usual
+        assert in_match is not None
 
 
 def test_with_nobody_to_compare_with_the_sentence_claims_no_comparison(pricing):
@@ -470,6 +722,167 @@ def test_with_nobody_to_compare_with_the_sentence_claims_no_comparison(pricing):
             continue
 
         assert "typical group" not in row["sentence"], (profile, row["sentence"])
+
+
+# ---------------------------------------------------------------------------
+# The verification row, and the guard on it
+#
+# The two models disagree about the sign of this input, so two mentors with
+# nearly the same answers, one priced by each model, were told opposite things
+# about the same fact about themselves. One of them was told that having been
+# checked by the platform lowers what they can charge, which is the one line
+# on the card a mentor might act on by asking not to be verified.
+#
+# Both signs are tested, and they are tested on the function rather than only
+# through the models, because which sign a given profile produces is a fact
+# about the fitted pipelines and could change with the next training run. The
+# rule has to hold either way round.
+# ---------------------------------------------------------------------------
+VERIFICATION_LOWERS = re.compile(
+    r"[Vv]erified mentors tend to charge less"
+    r"|not verified[^.]*charge more"
+    r"|[Bb]eing verified[^.]*lower",
+)
+
+
+@pytest.mark.parametrize(
+    ("verified", "effect_pct", "plausible"),
+    [
+        # A verified mentor: the effect may raise the price, or do nothing.
+        (True, 9, True),
+        (True, 2, True),
+        (True, -2, False),
+        (True, -9, False),
+        # An unverified one: it may lower the price, or do nothing.
+        (False, -9, True),
+        (False, -2, True),
+        (False, 2, False),
+        (False, 9, False),
+        # Either way, an effect too small to carry a direction claims none.
+        (True, 1, False),
+        (True, 0, False),
+        (False, -1, False),
+        (False, 0, False),
+    ],
+)
+def test_which_verification_directions_may_be_described(
+    verified, effect_pct, plausible
+):
+    """The rule itself, stated once, both signs and both answers."""
+    assert (
+        explanation.verified_direction_is_plausible(verified, effect_pct) is plausible
+    )
+
+
+def test_the_card_never_says_that_being_verified_lowers_a_price(pricing):
+    """
+    The invariant the guard exists for, over every profile and both models.
+
+    Checked against every sentence on the card rather than the verification
+    row alone: a claim barred from one row and allowed into the row below it
+    would be the same fault with a smaller blast radius.
+    """
+    for profile in PROFILES:
+        for model_used in (CORE, FULL):
+            account, _ = account_for(pricing, profile, model_used)
+            for said in every_sentence(account):
+                assert not VERIFICATION_LOWERS.search(said), (profile, said)
+
+
+def test_an_implausible_verification_effect_is_folded_rather_than_shown(pricing):
+    """
+    Where the sign points the wrong way, the row goes into the grouped line.
+
+    Folded and not dropped: the figure is still in the account, which is what
+    keeps the arithmetic exact. What is withheld is the sentence, because the
+    sentence is the part that makes a claim.
+    """
+    import math
+
+    folded = 0
+    for profile in PROFILES:
+        for model_used in (CORE, FULL):
+            row = answers(profile)
+            if model_used == FULL:
+                row = with_record(row)
+            _, parts = pricing.log_contributions(row, model_used)
+            effect = int(round((math.exp(parts[mapping.COLUMN_VERIFIED]) - 1) * 100))
+            plausible = explanation.verified_direction_is_plausible(
+                bool(profile["profile_verified"]), effect
+            )
+
+            account, _ = account_for(pricing, profile, model_used)
+            shown = {one["key"] for one in account["factors"]}
+            if plausible:
+                continue
+
+            folded += 1
+            assert mapping.CHOICE_VERIFIED not in shown, (profile, model_used, effect)
+            if abs(effect) >= explanation.SMALL_EFFECT_PCT:
+                other = account["other_small_effects"]
+                assert other is not None, (profile, model_used)
+                assert other["label"] == explanation.OTHER_GUARDED_LABEL
+
+    # The spread really does contain implausible cases, so the assertions
+    # above are not passing by never running.
+    assert folded > 0
+
+
+def test_a_plausible_verification_effect_is_shown_with_its_sentence(pricing):
+    """
+    The guard withholds a claim; it does not withhold the whole subject.
+
+    Where the direction is the one a mentor would expect, the row appears and
+    says so, so a verified mentor whose verification really does lift their
+    price is told about it.
+    """
+    import math
+
+    shown_any = 0
+    for profile in PROFILES:
+        for model_used in (CORE, FULL):
+            row = answers(profile)
+            if model_used == FULL:
+                row = with_record(row)
+            _, parts = pricing.log_contributions(row, model_used)
+            effect = int(round((math.exp(parts[mapping.COLUMN_VERIFIED]) - 1) * 100))
+            if not explanation.verified_direction_is_plausible(
+                bool(profile["profile_verified"]), effect
+            ):
+                continue
+
+            account, _ = account_for(pricing, profile, model_used)
+            rows = {one["key"]: one for one in account["factors"]}
+            # It is eligible, which is not the same as being in the top five.
+            # When it is there, it carries a sentence pointing the right way.
+            if mapping.CHOICE_VERIFIED not in rows:
+                continue
+            shown_any += 1
+            said = rows[mapping.CHOICE_VERIFIED]["sentence"]
+            if profile["profile_verified"]:
+                assert "charge more" in said, said
+            else:
+                assert "charge less" in said, said
+
+    assert shown_any > 0
+
+
+def test_folding_the_verification_row_leaves_the_price_untouched(pricing):
+    """
+    The guard is about what is said, not about what is charged.
+
+    The account still multiplies out to the price the mentor was quoted, on
+    the profiles where the row is withheld as much as on the others, because
+    the withheld multiplier goes into the grouped row rather than away.
+    """
+    for profile in PROFILES:
+        for model_used in (CORE, FULL):
+            account, price = account_for(pricing, profile, model_used)
+            got = explanation.reconciled_price(account)
+
+            assert abs(got - price) / price * 100 <= (
+                explanation.RECONCILIATION_TOLERANCE_PCT
+            ), (profile, model_used, got, price)
 
 
 # ---------------------------------------------------------------------------

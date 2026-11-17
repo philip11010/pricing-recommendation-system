@@ -321,6 +321,55 @@ network and read a little longer than the dashboard's figures.
 With no demonstration mentors seeded, or with the wrong `DEMO_PASSWORD`, it
 says so and sends previews only.
 
+## Demo walkthrough
+
+A ten minute run through both halves of the system, in the browser. It needs
+the API running with its models and comparable mentors (steps 1 to 4 above),
+the web application running (`npm run dev` in `web/`, see `web/README.md`),
+and the demonstration mentors: run `scripts/seed_demo_mentors.py`, which
+prints the demo emails and the password they share at the end of its output.
+The password is never written down in this repository; read it from that
+output, or set `DEMO_PASSWORD` before seeding to choose your own.
+
+**A new mentor, priced from the form alone.**
+
+1. Open the site and choose **Register**. Fill in a name, an address and a
+   password, choose a field, set the group size and tick a few skills. Submit
+   with **See my suggested price**.
+2. The recommendation page shows the suggested price with its range and the
+   note that it comes from the profile alone. Under **Why we suggest this
+   price**, read the typical price for mentors like this one, where this price
+   sits against it, and the short list of what moved it: the field, the group
+   size against the typical group in that field, the skills, and the rest
+   gathered into one line. Open **the numbers behind this** to see the
+   multipliers come to the price shown.
+3. Press **Accept** to land on the dashboard with the price on it, or
+   **Change** to enter a different price, or **Decline**. The suggestion is
+   advice: whatever is chosen is the mentor's price.
+4. Press **Log out** in the header.
+
+**A mentor with a history, priced from their record.**
+
+5. Choose **Existing mentor** and sign in with one of the seeded addresses,
+   for example the creative arts and design mentor who runs groups of four.
+6. The dashboard opens on their current price, the reviews they have had each
+   month, how busy their calendar has been and where their price sits among
+   similar mentors.
+7. Press **Add a service**. The group size opens on their most recent
+   service: change it, or leave it and change the skills, then press **See
+   the suggested price**. This recommendation comes from the full model, so
+   its explanation also carries the rows about their track record and the
+   demand for their time, and no low-confidence note.
+8. Press **Accept** on the new price, or **Change** and enter one. The
+   dashboard returns showing the new price in **Your price now**, and the
+   comparison with similar mentors is redrawn against it.
+
+The seeded mentors keep whatever is decided in this walkthrough. To put them
+back as they were, run `scripts/seed_demo_mentors.py --reset` and then the
+seed again.
+
+---
+
 ## Authentication and demo accounts
 
 A mentor registers with an email address and a password and is given a signed

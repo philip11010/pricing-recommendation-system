@@ -32,6 +32,25 @@ about where the training data came from, and the only percentages in it are the
 effects themselves and the mentor's position among similar mentors. The
 sentences describe what mentors like this one charge. They never claim that one
 thing causes another, because nothing here measured that.
+
+**And two things it may not say even when the number says them.**
+
+*A mentor is never told that being verified lowers what they can charge.* The
+two models disagree about the sign of that input, so two mentors with nearly
+the same answers were told opposite things about the same fact about
+themselves. The row is shown only when its direction is the one a mentor would
+expect, and is folded into the grouped row otherwise. The multiplier is kept
+either way, so the arithmetic still closes. See
+:func:`verified_direction_is_plausible`.
+
+*The demand row describes an input and does not argue from it.* It used to
+read "mentors whose time is booked as much as yours tend to charge more",
+which a mentor can only read as a reason to put their price up. The figure, its
+sign and its position on the card are unchanged; the instruction is gone. See
+:data:`DEMAND_SENTENCE`.
+
+Both are guards on what may be said rather than corrections to a model. No
+price changes because of either.
 """
 
 from __future__ import annotations
@@ -75,6 +94,13 @@ MAX_FACTORS_PROMOTED = 7
 
 OTHER_KEY = "other_small_effects"
 OTHER_LABEL = "Other small effects"
+
+# The same row, under a second name, for when it carries something that is not
+# a small effect. A row labelled "Other small effects" that holds a factor the
+# plausibility guard below held back would be describing itself wrongly, and
+# the figure in it would then be the largest thing on the card under the
+# smallest-sounding label. See the guard.
+OTHER_GUARDED_LABEL = "Other factors"
 
 # How far the rounded effects may miss the suggested price by.
 #
@@ -130,15 +156,17 @@ class Detail:
     """
     What a sentence may look at beyond the answer it is about.
 
-    Two things, and both are here to stop a sentence contradicting the figure
-    printed beside it. The size of the effect, so a line too small to matter
-    says so rather than claiming a direction. And the group size the mentors
-    in the comparison typically offer, so a sentence about a group compares
-    it with the groups it is actually being compared against.
+    Three things, and each is here to stop a sentence contradicting something
+    else on the screen. The size of the effect, so a line too small to matter
+    says so rather than claiming a direction. The group size mentors in this
+    field typically offer, so a sentence about a group names a reference that
+    means something. And the field itself, so that reference can be named as
+    the field's rather than as nobody's in particular.
     """
 
     effect_pct: int = 0
     typical_group_size: int | None = None
+    field: str | None = None
 
 
 def _field_sentence(answer: Any, direction: str, detail: Detail) -> str:
@@ -153,36 +181,50 @@ def _field_sentence(answer: Any, direction: str, detail: Detail) -> str:
 # ---------------------------------------------------------------------------
 # The group size sentence
 #
-# Rewritten because the first version of it said the opposite of the price it
-# sat beside. It read the effect as though it had been measured against a one
-# to one session, so a mentor seeing a group of three priced above their own
-# one to one rate was told that "a session for a group of 3 tends to be
-# priced lower than a one to one session". Both claims were on one screen.
+# Twice rewritten, and the reason each time was the reference it compared
+# against.
 #
-# The effect is measured against the average mentor in the data, not against
-# a one to one session, and there is no way to turn it into a statement about
-# one to one sessions without inventing the comparison.
+# The first version read the effect as though it had been measured against a
+# one to one session, so a mentor whose group of three was priced above their
+# own one to one rate was told that "a session for a group of 3 tends to be
+# priced lower than a one to one session". Both claims were on one screen. The
+# effect is measured against the average mentor in the data rather than
+# against a one to one session, and there is no way to turn it into a
+# statement about one to one sessions without inventing the comparison.
 #
-# So the sentence makes the one comparison this page can support: this group
-# against the group the mentors in the comparison sample typically offer.
-# Those mentors are already on the screen, directly below, which is what
-# makes the two halves of it agree.
+# The second compared the mentor's group against the typical group *in the
+# match*, and that reference is close to the mentor's own group size by
+# construction: a match is made on field and group size together, so a mentor
+# running groups of eight is compared with mentors running seven to eight and
+# told their group is about the usual size. True of the sample, and empty as a
+# statement about anything.
 #
-# Two rules follow from the fault. The direction word comes from the sign of
-# the effect and from nothing else, so the words and the number can never
-# disagree again. And one to one is named only when the mentor's own group is
-# one, because anywhere else it is a comparison nobody asked for.
+# The reference now is the typical group size **in the mentor's own field**,
+# across every group size, which is what a mentor means by "the usual group in
+# my field". It is measured rather than assumed: see
+# :func:`src.mentor.comparables.typical_group_size`. No number in this module
+# is a constant about group sizes.
+#
+# Two rules survive from the first fault and still hold. The direction word
+# comes from the sign of the effect and from nothing else, so the words and the
+# number can never disagree. And one to one is named only when the mentor's own
+# group is one, because anywhere else it is a comparison nobody asked for.
 # ---------------------------------------------------------------------------
-def _group_subject(seats: int) -> tuple[str, str]:
-    """How a group is named, and the verb that follows it."""
-    if seats <= 1:
-        return "Your one to one sessions", "are"
-    return f"Your group of {seats}", "is"
+def _group_subject(seats: int) -> str:
+    """How a mentor's own sessions are named, as the subject of a sentence."""
+    return "One to one sessions" if seats <= 1 else f"Groups of {seats}"
+
+
+def _in_field(field: str | None) -> str:
+    """Which field the typical group is typical of, named if it is known."""
+    if field is None:
+        return "in this field"
+    return f"in {mapping.field_label(field)}"
 
 
 def _group_sentence(answer: Any, direction: str, detail: Detail) -> str:
     seats = int(answer)
-    subject, verb = _group_subject(seats)
+    subject = _group_subject(seats)
 
     # Too small to carry a direction. Said as such rather than dressed up: a
     # one per cent effect described as raising a price claims more than the
@@ -193,22 +235,24 @@ def _group_sentence(answer: Any, direction: str, detail: Detail) -> str:
     movement = "up" if direction == RAISES else "down"
     usual = detail.typical_group_size
     if usual is None:
-        # Nobody to compare the group with. The effect is real and is still
-        # reported, without a comparison that was never measured.
+        # Nothing measured to compare the group with. The effect is real and
+        # is still reported, without a reference that was never measured.
         return f"{subject} tend to move the price per session {movement}."
 
-    if seats > usual:
-        stands = (
-            f"{verb} larger than the typical group of {usual} among similar mentors"
+    where = _in_field(detail.field)
+    if seats == usual:
+        # The mentor's group *is* the reference, so there is nothing to
+        # compare it with. Saying it is the usual size is the honest version,
+        # and the direction still comes from the number.
+        return (
+            f"{subject} are the usual size {where}, and that tends to move the "
+            f"price per session {movement}."
         )
-    elif seats < usual:
-        stands = (
-            f"{verb} smaller than the typical group of {usual} among similar mentors"
-        )
-    else:
-        stands = f"{verb} the same size as the typical group among similar mentors"
+
+    higher = "higher" if direction == RAISES else "lower"
     return (
-        f"{subject} {stands}, and that tends to move the price per session {movement}."
+        f"{subject} usually price {higher} than the typical group of "
+        f"{usual} {where}."
     )
 
 
@@ -232,15 +276,64 @@ def _skills_sentence(answer: Any, direction: str, detail: Detail) -> str:
     return f"{covered} makes little difference to this suggestion. {NEVER_LOWERS}"
 
 
+# ---------------------------------------------------------------------------
+# The verification row, and the guard on it
+#
+# The two models disagree about the sign of this input. In one, verified
+# mentors price slightly above unverified ones; in the other the effect comes
+# out the other way round. Both are small, both are artefacts of what the
+# training data happens to hold, and neither is a rule anybody would defend.
+#
+# On the page the disagreement was worse than the figure. Two mentors with
+# nearly the same answers, one priced by each model, were told opposite things
+# about the same fact about themselves, and one of them was told that having
+# been checked by the platform lowers what they can charge. That is not a
+# finding this system has; it is noise with a sentence attached. It is also the
+# one line on the card that a mentor might act on by asking not to be
+# verified.
+#
+# So the row is shown only when its direction is the one a mentor would expect,
+# and the expectation is stated rather than inferred:
+#
+#   * a verified mentor's verification may raise the price, or do nothing;
+#   * an unverified mentor's lack of verification may lower the price, or do
+#     nothing.
+#
+# Anything else, and anything too small to carry a direction, is folded into
+# the grouped row instead of being given a line. Folded, not dropped: the
+# multiplier still appears, in the grouped row and in the table behind the
+# disclosure, so the arithmetic still closes exactly and no number is hidden.
+# What is withheld is the sentence, because the sentence is the part that makes
+# a claim.
+#
+# This is a guard on what may be said, not a correction to the model. The price
+# is unchanged either way.
+# ---------------------------------------------------------------------------
+def verified_direction_is_plausible(verified: bool, effect_pct: int) -> bool:
+    """
+    Whether the verification effect points the way a mentor would expect.
+
+    False for an effect too small to carry a direction as well, because a line
+    claiming a direction it does not have is the same fault in a quieter
+    voice.
+    """
+    if abs(effect_pct) < SMALL_EFFECT_PCT:
+        return False
+    return effect_pct > 0 if verified else effect_pct < 0
+
+
 def _verified_sentence(answer: Any, direction: str, detail: Detail) -> str:
+    """
+    The sentence, which is only ever reached for a plausible direction.
+
+    The implausible branches are gone rather than left unreachable: a sentence
+    saying verification lowers a price should not exist in the file, where the
+    next edit could route to it.
+    """
     if bool(answer):
         if direction == RAISES:
             return "Verified mentors tend to charge more than unverified ones."
-        if direction == LOWERS:
-            return "Verified mentors tend to charge less than unverified ones."
         return "Being verified makes little difference to this suggestion."
-    if direction == RAISES:
-        return "Mentors who are not verified yet tend to charge more here."
     if direction == LOWERS:
         return "Mentors who are not verified yet tend to charge less."
     return "Verification makes little difference to this suggestion."
@@ -292,13 +385,41 @@ CHOICE_SENTENCES = {
 # advice about how to be rated. Said together, and said as an association, it
 # is a description again.
 # ---------------------------------------------------------------------------
+# How busy a calendar is, described rather than argued from.
+#
+# This row used to read "Mentors whose time is booked as much as yours tend to
+# charge more", which is a sentence a mentor can only read one way: as a reason
+# to put the price up now that they are busy. The system has no such finding.
+# What it has is one input among thirty-six, which is how much of their offered
+# time mentors have taken, and a number saying which way this mentor's own
+# share moved the suggestion.
+#
+# So the sentence says what the input is and stops. The figure beside it, its
+# sign, and its place in the ordering are all unchanged: what is removed is the
+# instruction, not the measurement. A mentor who wants to know which way it
+# moved their price reads the number, which is the honest place for it.
+#
+# The association note stays on the end, as it does on every row about a
+# mentor's record. It is a weaker statement than the one above it and it is
+# kept anyway: the rows that carry it are the rows built from what the
+# platform measured, and dropping the caution from one of them would make the
+# contract harder to check than it is to keep.
+DEMAND_SENTENCE = (
+    "This is how much of their offered time mentors like you have booked, "
+    "yours counted with theirs. It is one of the inputs behind this "
+    f"suggestion, not a reason to charge more or less. {ASSOCIATION_NOTE}"
+)
+
+
 def _demand_sentence(answer: Any, direction: str, detail: Detail) -> str:
-    booked = "Mentors whose time is booked as much as yours"
-    if direction == RAISES:
-        return f"{booked} tend to charge more. {ASSOCIATION_NOTE}"
-    if direction == LOWERS:
-        return f"{booked} tend to charge less. {ASSOCIATION_NOTE}"
-    return f"{booked} charge about the same as everybody else. {ASSOCIATION_NOTE}"
+    """
+    One sentence, whatever the direction.
+
+    Deliberately not three. A sentence per direction is how the old row came
+    to give advice: once the shape is "mentors like you tend to charge X", the
+    only thing left to choose is X.
+    """
+    return DEMAND_SENTENCE
 
 
 def _track_record_sentence(answer: Any, direction: str, detail: Detail) -> str:
@@ -369,11 +490,12 @@ def explain_price(
     difference between the two is real and is carried by the skills line, which
     is the axis the correction acts on.
 
-    ``typical_group_size`` is the group size the mentors in the comparison
-    sample typically offer. It is passed in rather than looked up here so that
-    the sentence about a group and the comparison below it are reading the
-    same mentors. Absent when there is nobody to compare with, and the
-    sentence then says less rather than inventing a comparison.
+    ``typical_group_size`` is the group size mentors in this mentor's own
+    field typically offer, measured across every group size. It is passed in
+    rather than looked up here so that this module reads no files and the
+    caller decides which population the reference comes from. Absent when
+    there is nothing measured to compare with, and the sentence then says
+    less rather than inventing a reference.
     """
     answers = mapping.answers_from_inputs(inputs)
     start, parts = pricing.log_contributions(inputs, model_used)
@@ -388,7 +510,10 @@ def explain_price(
     baseline_log = start + sum(parts[column] for column in fixed)
     baseline = max(float(math.expm1(baseline_log)), 1.0)
 
-    detail = Detail(typical_group_size=typical_group_size)
+    detail = Detail(
+        typical_group_size=typical_group_size,
+        field=answers[mapping.CHOICE_FIELD],
+    )
     candidates = _candidates(parts, answers, model_used)
 
     # Demand is never a line that can be grouped away, so it is held out of
@@ -396,8 +521,23 @@ def explain_price(
     # for a different reason: it is worked out last, from whatever is left
     # over, because it carries the correction the prediction service applied.
     forced = [one for one in candidates if one["key"] == mapping.THEME_DEMAND]
+
+    # And the verification row is held back when its direction is not the one
+    # a mentor would expect, so the card can never say that being checked
+    # lowers what they can charge. Held back from the sentence only: the
+    # multiplier goes into the grouped row, so the arithmetic is untouched.
+    # See verified_direction_is_plausible.
+    guarded = [
+        one
+        for one in candidates
+        if one["key"] == mapping.CHOICE_VERIFIED
+        and not verified_direction_is_plausible(
+            bool(one["answer"]), _as_pct(one["multiplier"])
+        )
+    ]
+    held = forced + guarded
     pool = sorted(
-        (one for one in candidates if one not in forced),
+        (one for one in candidates if one not in held),
         key=lambda one: abs(_as_pct(one["multiplier"])),
         reverse=True,
     )
@@ -415,24 +555,26 @@ def explain_price(
     # not.
     rows, other_row = _settled(
         pool[:fewest],
-        pool[fewest:],
+        pool[fewest:] + guarded,
         forced,
         answers,
         baseline,
         suggested_price,
         detail,
+        guarded,
     )
     for slots in range(fewest + 1, most + 1):
         if _grouped_is_smallest(rows, other_row):
             break
         rows, other_row = _settled(
             pool[:slots],
-            pool[slots:],
+            pool[slots:] + guarded,
             forced,
             answers,
             baseline,
             suggested_price,
             detail,
+            guarded,
         )
 
     started = int(round(baseline))
@@ -478,6 +620,7 @@ def _settled(
     baseline: float,
     suggested_price: int,
     detail: Detail,
+    guarded: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """
     One choice of rows, closed by the skills line so the arithmetic comes out.
@@ -490,7 +633,7 @@ def _settled(
     rows = [
         _row(one, _as_pct(one["multiplier"]), detail) for one in forced + list(shown)
     ]
-    other_row = _other_row(hidden)
+    other_row = _other_row(hidden, guarded)
 
     settled = 1.0
     for row in rows + ([other_row] if other_row else []):
@@ -515,8 +658,18 @@ def _settled(
 def _grouped_is_smallest(
     rows: list[dict[str, Any]], other_row: dict[str, Any] | None
 ) -> bool:
-    """Whether the grouped row is smaller than every row shown above it."""
+    """
+    Whether the grouped row is smaller than every row shown above it.
+
+    True without checking when the row carries a guarded factor, because then
+    it is not claiming to be only small effects: it is named "Other factors"
+    and may legitimately be the largest thing on the card. Widening the list
+    could not fix that either, since the guarded factor is held back by what it
+    says rather than by how big it is.
+    """
     if other_row is None:
+        return True
+    if other_row["label"] == OTHER_GUARDED_LABEL:
         return True
     return abs(other_row["effect_pct"]) < min(abs(row["effect_pct"]) for row in rows)
 
@@ -576,17 +729,28 @@ def _candidates(
     return candidates
 
 
-def _other_row(hidden: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The lines too small to show, multiplied into one that says so."""
+def _other_row(
+    hidden: list[dict[str, Any]], guarded: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    """
+    The lines not shown on their own, multiplied into one that says so.
+
+    Named for what it holds. Usually that is only effects too small to be
+    worth a line each, and it says so. When it also carries a factor the
+    plausibility guard held back, it takes the wider name instead, because a
+    reader who sees a large figure under "Other small effects" has been told
+    something untrue about how the account was tidied.
+    """
     if not hidden:
         return None
     together = 1.0
     for one in hidden:
         together *= one["multiplier"]
     effect = _as_pct(together)
+    withheld = [one for one in (guarded or []) if one in hidden]
     return {
         "key": OTHER_KEY,
-        "label": OTHER_LABEL,
+        "label": OTHER_GUARDED_LABEL if withheld else OTHER_LABEL,
         "direction": direction_of(effect),
         "effect_pct": effect,
         "sentence": "Everything else about your answers comes to this together.",
@@ -598,7 +762,11 @@ def _other_row(hidden: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _row(one: dict[str, Any], effect_pct: int, detail: Detail) -> dict[str, Any]:
     direction = direction_of(effect_pct)
     key = one["key"]
-    said = Detail(effect_pct=effect_pct, typical_group_size=detail.typical_group_size)
+    said = Detail(
+        effect_pct=effect_pct,
+        typical_group_size=detail.typical_group_size,
+        field=detail.field,
+    )
     write = GROUP_SENTENCES.get(key) or CHOICE_SENTENCES[key]
     return {
         "key": key,

@@ -435,6 +435,58 @@ def typical_profile(
     return typical
 
 
+# ---------------------------------------------------------------------------
+# The typical group size in a field
+#
+# A figure of its own rather than one read off a match, and the difference is
+# the whole point of it.
+#
+# A match is made on field *and* group size, so the typical group size inside
+# one is close to the mentor's own group size by construction: a mentor running
+# groups of eight is compared with mentors running groups of seven to eight,
+# and "the typical group among similar mentors" comes back as eight. A sentence
+# built on that told every mentor their group was about the usual size, which
+# is true of the sample and says nothing about the field.
+#
+# So this reads the whole field, at every group size, which is the reference a
+# mentor means by "the typical group in my field".
+#
+# It is a median rather than a mean: one mentor running sessions of eight
+# should not move what "typical" means for a field where almost everybody
+# works one to one.
+# ---------------------------------------------------------------------------
+
+# The fewest mentors in a field worth taking a typical group size from. Below
+# it the figure is one or two mentors' habits rather than a field's, and the
+# answer falls back to every field together, which is a weaker statement but
+# a measured one.
+MIN_FIELD_ROWS = 10
+
+
+def typical_group_size(table: ComparablesTable, field: str) -> int | None:
+    """
+    The group size a mentor in ``field`` typically offers, across the table.
+
+    Every mentor in the field at every group size, which is what makes this a
+    statement about the field rather than about one match inside it. Falls
+    back to the whole table when a field holds too few mentors to describe,
+    and returns None only when there is nothing to read at all, because a
+    typical group size of zero is not a session anybody could offer.
+    """
+    rows = table.rows
+    if rows.empty:
+        return None
+
+    field = mapping.validate_field(field)
+    in_field = rows[rows["field"] == field]
+    pool = in_field if len(in_field) >= MIN_FIELD_ROWS else rows
+
+    middle = pool["max_mentees"].median()
+    if pd.isna(middle):
+        return None
+    return int(round(float(middle)))
+
+
 def typical_booked_share(
     found: ComparableSet, points: int = SPREAD_POINTS
 ) -> float | None:

@@ -34,8 +34,8 @@ function factor(overrides: Partial<PriceFactor> = {}): PriceFactor {
     direction: "raises",
     effect_pct: 10,
     sentence:
-      "Your group of 4 is larger than the typical group of 2 among similar " +
-      "mentors, and that tends to move the price per session up.",
+      "Groups of 4 usually price higher than the typical group of 2 in " +
+      "Technology and software.",
     association: false,
     components: [],
     ...overrides,
@@ -179,20 +179,21 @@ describe("a row's words beside its number", () => {
       effect_pct: 14,
       direction: "raises",
       sentence:
-        "Your group of 4 is larger than the typical group of 2 among similar " +
-        "mentors, and that tends to move the price per session up.",
+        "Groups of 4 usually price higher than the typical group of 2 in " +
+        "Technology and software.",
     });
 
     expect(describeEffect(raising)).toContain("raises");
-    expect(raising.sentence).toContain("up");
-    expect(raising.sentence).not.toContain("down");
+    // "up" as a word, because "Groups" contains it as a substring.
+    expect(raising.sentence).toMatch(/higher|\bup\b/);
+    expect(raising.sentence).not.toMatch(/lower|\bdown\b/);
   });
 
   it("never names a one to one session for a larger group", () => {
     const grouped = factor({
       sentence:
-        "Your group of 4 is larger than the typical group of 2 among similar " +
-        "mentors, and that tends to move the price per session up.",
+        "Groups of 4 usually price higher than the typical group of 2 in " +
+        "Technology and software.",
     });
 
     expect(grouped.sentence.toLowerCase()).not.toContain("one to one");

@@ -76,7 +76,11 @@ test("a new mentor is told why, in a short list plus the small ones", async ({
   const count = await rows.count();
   // Scoped to the list: the same label appears again inside the numbers
   // table, which is closed but still in the page.
-  const gathered = await rows.filter({ hasText: "Other small effects" }).count();
+  // Named "Other factors" instead when it also carries a factor the card
+  // held back from its own line, so both names count as the gathered row.
+  const gathered = await rows
+    .filter({ hasText: /Other small effects|Other factors/ })
+    .count();
 
   expect(count).toBeGreaterThan(0);
   // Five, or up to seven where five would have left the gathered row larger
@@ -262,7 +266,12 @@ test("a group of more than one is never described against a one to one", async (
   const said = (await card.textContent()) ?? "";
 
   expect(said.toLowerCase()).not.toContain("one to one");
-  expect(said).toMatch(/typical group of \d+ among similar mentors/);
+  // The group is compared with the typical group in the mentor's field,
+  // measured across the whole field rather than read off the match. When
+  // the group is the typical one, the sentence says so instead.
+  expect(said).toMatch(
+    /typical group of \d+ in Technology and software|are the usual size in Technology and software/,
+  );
 });
 
 test("the comparisons are read before the account of the price", async ({ page }) => {
